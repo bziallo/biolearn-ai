@@ -409,6 +409,66 @@ python -m venv .venv
 .\.venv\Scripts\python.exe ..\scripts\run_backend.py --port 8000
 ```
 
+## Android APK 与手机同步（阶段三）
+
+手机端是同一个前端构建产物的 Capacitor 封装，**不是另一套 App**：手机与电脑访问同一台
+FastAPI 后端和同一个 SQLite，APK 内没有数据库副本，也没有任何服务端密钥。
+
+### 产物与构建
+
+```
+frontend/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+构建要求：JDK **21**（JDK 17 无法编译 Capacitor 7）、Android SDK
+`platforms;android-35` 与 `build-tools;35.0.0`、Gradle 8.11.1。
+
+```powershell
+$env:JAVA_HOME = "C:\path\to\jdk-21"
+$env:ANDROID_HOME = "C:\path\to\android-sdk"
+$env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
+
+cd frontend
+pnpm build:android        # 使用 .env.android，不把开发机地址打进 APK
+pnpm exec cap sync android
+cd android
+gradlew.bat assembleDebug
+```
+
+`frontend/android/local.properties` 由本机生成（含 SDK 路径），已被 gitignore。
+
+### 连接电脑后端（局域网）
+
+1. 电脑 `.env` 设置共享口令（推荐）：`ACCESS_TOKEN=<随机字符串>`。
+2. 双击 `start-lan.bat`（等价于 `python scripts/run_backend.py --lan --port 8000`），
+   启动日志会打印 `手机请填写：http://<电脑IPv4>:8000/api/v1`。
+3. 手机与电脑连接同一 Wi-Fi；首次安装后打开 App → “连接设置” → 填地址与口令 → 保存并测试。
+4. 手机不能填 `localhost`：那是手机自己。Windows 防火墙需放行 8000/TCP（仅专用网络）。
+
+**安全边界**：默认只监听 `127.0.0.1`；`--lan` 是显式开关。访问口令是单一共享口令，
+不是多用户系统，不要把服务直接暴露到公网。远程部署必须 HTTPS，release 构建默认禁止明文 HTTP。
+
+### 验证记录
+
+- APK 在实体机 PA2553（Android 16）安装并运行，通过 `http://10.61.232.199:8000/api/v1` 在线。
+- 手机新建学科 → 桌面 API 立即可见；桌面新建 → 手机刷新可见。
+- 手机完成 4 题练习（75 分）→ 桌面读取到同一会话的 4 条作答。
+- 指向不可达地址时显示超时排查提示。
+- 详细报告：[`docs/PHASE3_ANDROID.md`](docs/PHASE3_ANDROID.md)
+
+### 代码位置
+
+| 路径 | 说明 |
+| --- | --- |
+| `frontend/src/lib/api/connection.ts` | API Base 解析（运行时 > 构建时 > 同源；APK 不回退 localhost） |
+| `frontend/src/pages/ConnectionSettingsPage.tsx` | 连接设置页（地址、口令、测试） |
+| `frontend/src/layouts/AppLayout.tsx` | 底部导航（窄屏） |
+| `frontend/capacitor.config.ts` | Capacitor 配置 |
+| `frontend/android/` | Android 工程 |
+| `backend/app/core/security.py` | 可选共享口令中间件 |
+| `backend/app/api/v1/auth.py` | `GET /api/v1/auth` 状态接口 |
+| `start-lan.bat` | 显式局域网启动 |
+
 ## 数据备份与恢复
 
 ### 备份
