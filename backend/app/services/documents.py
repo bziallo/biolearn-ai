@@ -47,7 +47,9 @@ def sanitize_filename(filename: str) -> str:
 
 
 def _upload_root(settings: Settings) -> Path:
-    root = settings.resolved(Path(settings.upload_dir))
+    # Resolve the root too: an absolute temp path may use an 8.3 short name and
+    # would otherwise fail the parent check against the resolved target path.
+    root = settings.resolved(Path(settings.upload_dir)).resolve()
     root.mkdir(parents=True, exist_ok=True)
     return root
 

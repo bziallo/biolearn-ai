@@ -478,7 +478,7 @@ def _store_external_document(
     digest: str,
     settings: Settings,
 ) -> tuple[Document, Path]:
-    root = settings.resolved(Path(settings.upload_dir))
+    root = settings.resolved(Path(settings.upload_dir)).resolve()
     root.mkdir(parents=True, exist_ok=True)
     document_id = str(uuid4())
     storage_name = f"{document_id}.json"
