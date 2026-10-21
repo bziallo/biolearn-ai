@@ -1,0 +1,156 @@
+{
+  "plan": {
+    "target_questions": 20,
+    "batch_size": 5,
+    "batches": 4,
+    "type_mixes": [
+      [
+        "single_choice",
+        "true_false"
+      ],
+      [
+        "multiple_choice",
+        "single_choice"
+      ],
+      [
+        "true_false",
+        "short_answer"
+      ],
+      [
+        "single_choice",
+        "multiple_choice"
+      ]
+    ],
+    "estimated_model_calls": 6.0,
+    "estimated_tokens": {
+      "input": 7200.0,
+      "output": 10800.0
+    },
+    "estimated_cost_usd": 0.0076,
+    "pricing_basis": "DeepSeek off-peak list price, input cache-miss $0.15/M, output $0.60/M; estimate only, actual usage is recorded per job"
+  },
+  "target_questions": 20,
+  "saved_questions": 20,
+  "skipped_questions": 0,
+  "failed_batches": 0,
+  "completed_batches": 4,
+  "format_repairs": 0,
+  "model_calls": 4,
+  "tokens": {
+    "prompt": 2744,
+    "completion": 6808,
+    "total": 9552
+  },
+  "estimated_cost_usd": 0.004496,
+  "cost_note": "估算值：DeepSeek 非高峰列表价，输入按 cache miss $0.15/M、输出 $0.60/M；未计入缓存命中折扣，实际账单以提供商为准",
+  "latency_seconds": {
+    "mean": 7.75,
+    "max": 10.64
+  },
+  "error_kinds": {
+    "none": 4
+  },
+  "batches": [
+    {
+      "job_id": "4498f697-0f95-48d6-91ff-b32ba9f6f473",
+      "types": [
+        "single_choice",
+        "true_false"
+      ],
+      "knowledge_point_count": 2,
+      "target": 5,
+      "status": "completed",
+      "saved": 5,
+      "skipped": 0,
+      "error": null,
+      "error_kind": null,
+      "format_repairs": 0,
+      "model_calls": 1,
+      "tokens": {
+        "prompt_tokens": 651,
+        "completion_tokens": 1751,
+        "total_tokens": 2402,
+        "reasoning_tokens": 1081
+      },
+      "latency_seconds": 8.15,
+      "warnings": [],
+      "json_mode_fallback": null
+    },
+    {
+      "job_id": "7f883e93-eb3c-43a0-a194-cfc330bf1a04",
+      "types": [
+        "multiple_choice",
+        "single_choice"
+      ],
+      "knowledge_point_count": 2,
+      "target": 5,
+      "status": "completed",
+      "saved": 5,
+      "skipped": 0,
+      "error": null,
+      "error_kind": null,
+      "format_repairs": 0,
+      "model_calls": 1,
+      "tokens": {
+        "prompt_tokens": 667,
+        "completion_tokens": 2370,
+        "total_tokens": 3037,
+        "reasoning_tokens": 1606
+      },
+      "latency_seconds": 10.64,
+      "warnings": [],
+      "json_mode_fallback": null
+    },
+    {
+      "job_id": "5a0aec65-b1e2-41c6-b84f-c401650c7cc1",
+      "types": [
+        "true_false",
+        "short_answer"
+      ],
+      "knowledge_point_count": 2,
+      "target": 5,
+      "status": "completed",
+      "saved": 5,
+      "skipped": 0,
+      "error": null,
+      "error_kind": null,
+      "format_repairs": 0,
+      "model_calls": 1,
+      "tokens": {
+        "prompt_tokens": 656,
+        "completion_tokens": 1766,
+        "total_tokens": 2422,
+        "reasoning_tokens": 1209
+      },
+      "latency_seconds": 8.32,
+      "warnings": [],
+      "json_mode_fallback": null
+    },
+    {
+      "job_id": "44b9187e-e07a-4bed-bf07-9ee84a67a623",
+      "types": [
+        "single_choice",
+        "multiple_choice"
+      ],
+      "knowledge_point_count": 3,
+      "target": 5,
+      "status": "completed",
+      "saved": 5,
+      "skipped": 0,
+      "error": null,
+      "error_kind": null,
+      "format_repairs": 0,
+      "model_calls": 1,
+      "tokens": {
+        "prompt_tokens": 770,
+        "completion_tokens": 921,
+        "total_tokens": 1691,
+        "reasoning_tokens": 0
+      },
+      "latency_seconds": 3.89,
+      "warnings": [],
+      "json_mode_fallback": null
+    }
+  ],
+  "temp_db": "C:\\Users\\BZLCIA~1\\AppData\\Local\\Temp\\biolearn-phase5-eval-jw7nbwxs"
+}

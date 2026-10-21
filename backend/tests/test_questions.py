@@ -1060,3 +1060,37 @@ def test_generation_reports_database_write_failure_distinctly(
         assert "保存到数据库失败" in (stored.error or "")
         assert stored.timings["error_kind"] == "database"
         assert db.query(Question).count() == 0
+
+
+def test_second_generation_job_is_rejected_while_first_is_active(
+    session_factory,
+    app_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = make_context(session_factory)
+    monkeypatch.setattr(
+        question_generation,
+        "effective_ai_settings",
+        lambda _settings=None: app_settings,
+    )
+    with session_factory() as db:
+        first = question_generation.create_generation_job(
+            db,
+            subject_id=context["subject_id"],
+            knowledge_point_ids=context["approved_ids"],
+            types=[QuestionType.SINGLE_CHOICE],
+            count=1,
+            settings=app_settings,
+        )
+        with pytest.raises(DomainError) as error:
+            question_generation.create_generation_job(
+                db,
+                subject_id=context["subject_id"],
+                knowledge_point_ids=context["approved_ids"],
+                types=[QuestionType.SINGLE_CHOICE],
+                count=1,
+                settings=app_settings,
+            )
+        assert error.value.code == "question_generation_job_running"
+        assert db.query(question_generation.QuestionGenerationJob).count() == 1
+    assert first.status == "queued"

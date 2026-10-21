@@ -76,7 +76,7 @@ questions.1.answer: Input should be an object [dict_type]
 
 | 文件 | 修改原因 |
 | --- | --- |
-| `backend/app/services/ai_client.py` | JSON 模式（400 自动降级）；稳健 JSON 提取；错误分类（timeout/network/auth/quota/rate_limit/server/bad_request/invalid_json/bad_shape）；提供商错误只读 code/type，不回显原文 |
+| `backend/app/services/ai_client.py` | JSON 模式（400/422 明确不支持时自动降级）；稳健 JSON 提取；错误分类（timeout/network/auth/quota/rate_limit/server/bad_request/invalid_json/bad_shape）；提供商错误只读 code/type，不回显原文 |
 | `backend/app/services/question_generation.py` | 题目输出归一化；逐题校验/跳过；格式修复 1 次；错误类别与 warnings 写入 timings；DB 写入失败单独提示 |
 | `backend/app/core/config.py` | 新增 `AI_JSON_MODE`（默认 true） |
 | `backend/app/services/ai_config.py` | 运行时配置支持 `json_mode` |
@@ -150,7 +150,7 @@ questions.1.answer: Input should be an object [dict_type]
 6. 数据库写入失败 → failed，提示“保存到数据库失败”，`error_kind=database`，无题目。
 7. JSON 提取：代码围栏、前后解释文字、嵌套对象、非法文本。
 8. 提供商错误：402 余额、429 限流、401 认证、503 服务端、400 上下文。
-9. JSON 模式请求体包含 `response_format`；400 自动降级且后续不再重复 400。
+9. JSON 模式请求体包含 `response_format`；400/422 明确不支持时降级一次，后续不再重复发送 response_format。
 
 ---
 
@@ -205,8 +205,8 @@ generated: 2
 2. **修复次数为 1**：极少数模型连续两次输出异常时会失败，需要用户重试；这是成本与稳定性的取舍。
 3. **未做真机上的出题全流程**：手机端通过同一 API 已验证在线与同步；本轮出题闭环在隔离库用 HTTP 完成，
    未在手机上实际点“生成题目”（生成任务耗时较长，手机仅验证读写与练习）。
-4. **未覆盖所有 OpenAI 兼容网关**：JSON 模式降级逻辑按 HTTP 400 处理；某些网关用 422 拒绝，
-   当前会直接失败，可按需扩展。
+4. **未覆盖所有 OpenAI 兼容网关**：JSON 模式降级逻辑现覆盖 400/422 明确表明 response_format 不支持的响应；
+   其他 400/422 参数错误不会降级。真实 422 网关尚未实测。
 5. **未做真实模型批量稳定性统计**：本轮只做了小样本真实调用，未统计 20 题/多知识点的失败率与成本。
 6. 建议后续：加入“修复提示包含上一次错误但不包含原文”的脱敏审计；对 20 题批量做 10 次采样统计；
    把出题失败类别展示在任务卡片上（目前已在 `error`/`timings`，前端只显示 error 文本）。

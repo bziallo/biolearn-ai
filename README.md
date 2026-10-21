@@ -56,8 +56,8 @@ BioLearn AI 是面向医学生与生命科学学习者的本地优先知识工�
 | 题库管理与人工审核 | 可用 |
 | 从已审核知识点 AI 出题 | 可用（生成题目默认待审核） |
 | 基础练习、自动判分、错题本 | 可用 |
-| 后端 pytest | 77 项通过 |
-| 前端 Vitest | 26 项通过 |
+| 后端 pytest | 108 项通过 |
+| 前端 Vitest | 30 项通过 |
 
 ## 技术栈
 
@@ -333,6 +333,9 @@ AI_EXTRACTION_CONCURRENCY=3
 - 模型只依据已审核知识点起草，不做“事实已验证”的承诺；解析与答案的结构一致性会被校验，但语义事实仍需人工确认。
 
 详细诊断与实测见 [`docs/PHASE4_AI_RELIABILITY.md`](docs/PHASE4_AI_RELIABILITY.md)。
+
+V1.0 发布候选验收（批量稳定性、422 兼容、Android 真机闭环、备份恢复）见
+[`docs/PHASE5_ACCEPTANCE.md`](docs/PHASE5_ACCEPTANCE.md)。
 
 ### 练习
 
@@ -708,13 +711,15 @@ pnpm test
 pnpm build
 ```
 
-本次实际结果：
+本次实际结果（阶段五）：
 
-- 后端：`77 passed`（41 项原有/取消 + 15 项智能导入 + 9 项外部 JSON + 2 项并发/部分失败 + 8 项题库/练习 + 2 项 SPA 托管）
-- 前端：`12` 个测试文件，`26 passed`
+- 后端：`108 passed`
+- 前端：`13` 个测试文件，`30 passed`
 - ESLint：通过
 - TypeScript：通过
-- 生产构建：通过（62 个模块）
+- 生产构建：通过
+- Android：debug APK 安装到真机并完成 AI 出题→审核→练习→结果；release 构建通过
+- AI 批量评估：20 题 / 4 批次，20 保存、0 跳过、0 失败、4 次调用、9,552 tokens（见 `docs/PHASE5_ACCEPTANCE.md`）
 - Alembic：空库 upgrade → downgrade → upgrade 通过
 - 真实 PDF：`第二章第三节-蛋白质的分子结构.pdf` 75 页，解析为 66 个按页分块；`第二章第四节-蛋白质结构与功能的关系.pdf` 38 页可解析
 - 旧版 `.ppt`：明确返回 `legacy_ppt_unsupported`
