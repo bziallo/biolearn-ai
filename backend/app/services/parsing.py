@@ -275,27 +275,52 @@ def _parse_pptx(path: Path, fallback_title: str) -> ParsedDocument:
     for slide_number, slide in enumerate(presentation.slides, start=1):
         slide_start = len(blocks)
         title_shape = slide.shapes.title
-        if title_shape is not None and title_shape.has_text_frame:
+        has_text_title = bool(
+            title_shape is not None
+            and title_shape.has_text_frame
+            and title_shape.text_frame.text.strip()
+        )
+        if has_text_title:
             title_text = title_shape.text_frame.text.strip()
-            if title_text:
-                blocks.append(
-                    ParsedBlock(
-                        "heading",
-                        title_text,
-                        level=1,
-                        slide=slide_number,
-                    )
+            blocks.append(
+                ParsedBlock(
+                    "heading",
+                    title_text,
+                    level=1,
+                    slide=slide_number,
                 )
-                if title == fallback_title:
-                    title = title_text
+            )
+            if title == fallback_title:
+                title = title_text
 
         for shape in slide.shapes:
             if shape is title_shape:
                 continue
             if getattr(shape, "has_text_frame", False):
-                for paragraph in shape.text_frame.paragraphs:
-                    text = paragraph.text.strip()
-                    if not text:
+                paragraphs = [
+                    paragraph.text.strip()
+                    for paragraph in shape.text_frame.paragraphs
+                    if paragraph.text.strip()
+                ]
+                for index, (paragraph, text) in enumerate(
+                    zip(shape.text_frame.paragraphs, paragraphs)
+                ):
+                    # Slides without a title placeholder (very common for
+                    # hand-made decks) would otherwise never produce a
+                    # heading, so structure detection always fell back to the
+                    # filename. Treat the first line of the first non-empty
+                    # text frame as the slide heading.
+                    if not has_text_title and index == 0:
+                        blocks.append(
+                            ParsedBlock(
+                                "heading",
+                                text,
+                                level=1,
+                                slide=slide_number,
+                            )
+                        )
+                        if title == fallback_title:
+                            title = text
                         continue
                     kind = "list_item" if paragraph.level > 0 else "paragraph"
                     blocks.append(

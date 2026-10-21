@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { API_BASE_URL } from '../lib/api/client'
 import { ToastProvider } from './ToastProvider'
 import { DocumentUploadCard } from './DocumentUploadCard'
 
@@ -68,7 +69,9 @@ describe('DocumentUploadCard', () => {
 
     await waitFor(() => expect(onUploaded).toHaveBeenCalledWith(uploadedDocument))
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('http://127.0.0.1:8000/api/v1/documents')
+    // The API base follows the runtime configuration (env override or the
+    // same-origin default), so assert against the single source of truth.
+    expect(url).toBe(`${API_BASE_URL}/documents`)
     const body = init.body as FormData
     expect(body.get('subject_id')).toBe('s1')
     expect(body.get('name')).toBe('蛋白质讲义')
