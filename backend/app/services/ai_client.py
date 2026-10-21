@@ -402,10 +402,19 @@ def _json_mode_unsupported(response: httpx.Response) -> bool:
         "response format",
         "json_object",
         "json mode",
-        "json mode is not supported",
-        "unsupported parameter",
     )
-    return any(marker in body for marker in markers)
+    rejections = (
+        "not support",
+        "unsupported",
+        "not permitted",
+        "not allowed",
+        "unknown",
+        "unrecognized",
+        "invalid parameter",
+    )
+    return any(marker in body for marker in markers) and any(
+        marker in body for marker in rejections
+    )
 
 
 def _provider_error_code(response: httpx.Response) -> str | None:

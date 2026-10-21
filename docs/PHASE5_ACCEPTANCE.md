@@ -58,8 +58,8 @@
 
 ### 修改
 
-- 只有响应体明确出现 `response_format` / `response format` / `json_object` /
-  `json mode` / `unsupported parameter`（仅 400/422）时，才判定为“JSON 模式不支持”。
+- 只有响应体同时包含 JSON 模式标识（`response_format` / `response format` / `json_object` /
+  `json mode`）与明确拒绝语义（not supported / unsupported / not permitted / unknown 等，仅 400/422）时，才判定为“JSON 模式不支持”。
 - 判定为不支持时：关闭 JSON 模式并**仅重试一次**；后续调用不再发送 `response_format`。
 - 其他 400/422（如 `max_tokens`、消息格式）不降级，直接保留错误分类。
 - `last_json_mode_fallback` 记录降级状态与原因；出题任务写入 `timings.json_mode_fallback`。
@@ -164,7 +164,7 @@ App：`ai.biolearn.app`，debug APK，连接 `http://10.61.232.199:8000/api/v1`�
 
 | 项目 | 命令 | 结果 |
 | --- | --- | --- |
-| 后端全量 | `pytest`（backend/） | **108 passed** |
+| 后端全量 | `pytest`（backend/） | **110 passed** |
 | 前端类型 | `tsc --noEmit` | 通过 |
 | 前端 Lint | `eslint .` | 通过 |
 | 前端单测 | `vitest run` | **30 passed（13 文件）** |

@@ -165,7 +165,9 @@ def test_400_other_parameter_error_does_not_degrade(
     [
         (422, {"error": {"message": "response_format is not supported"}}, True),
         (422, {"error": {"message": "unsupported parameter: response_format"}}, True),
+        (422, {"error": {"message": "unsupported parameter: temperature"}}, False),
         (422, {"error": {"message": "messages[0] is invalid"}}, False),
+        (400, {"error": {"message": "response_format is required"}}, False),
         (400, {"error": {"message": "max_tokens too large"}}, False),
         (400, {"error": {"message": "response_format json_object unsupported"}}, True),
         (500, {"error": {"message": "response_format unsupported"}}, False),
