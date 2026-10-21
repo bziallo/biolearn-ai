@@ -42,6 +42,7 @@ describe('HomePage', () => {
     ).toHaveTextContent('把生物医学资料')
     expect(await screen.findByText('服务在线')).toBeInTheDocument()
     expect(screen.getByText('BioLearn AI API')).toBeInTheDocument()
+    expect(screen.getByText(/GET http/)).toBeInTheDocument()
   })
 
   it('shows an offline state when the backend is unreachable', async () => {
@@ -53,6 +54,10 @@ describe('HomePage', () => {
     renderHomePage()
 
     expect(await screen.findByText('无法连接后端')).toBeInTheDocument()
-    expect(screen.getByText('Failed to fetch')).toBeInTheDocument()
+    // The message must point at the configuration, not at a raw TypeError.
+    expect(
+      screen.getByText(/无法连接服务器 .*请确认电脑端后端已启动/),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '前往连接设置' })).toBeInTheDocument()
   })
 })

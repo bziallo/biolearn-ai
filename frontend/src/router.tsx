@@ -3,6 +3,7 @@ import { createBrowserRouter } from 'react-router-dom'
 import { AppLayout } from './layouts/AppLayout'
 import { AboutPage } from './pages/AboutPage'
 import { AISettingsPage } from './pages/AISettingsPage'
+import { ConnectionSettingsPage } from './pages/ConnectionSettingsPage'
 import { DocumentsPage } from './pages/DocumentsPage'
 import { HomePage } from './pages/HomePage'
 import { ImportPage } from './pages/ImportPage'
@@ -33,6 +34,7 @@ export const router = createBrowserRouter([
       { path: 'questions', element: <QuestionsPage /> },
       { path: 'practice', element: <PracticePage /> },
       { path: 'settings/ai', element: <AISettingsPage /> },
+      { path: 'settings/connection', element: <ConnectionSettingsPage /> },
       { path: 'about', element: <AboutPage /> },
       { path: '*', element: <NotFoundPage /> },
     ],

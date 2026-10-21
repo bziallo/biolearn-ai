@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink } from 'react-router-dom'
 
-import { API_BASE_URL } from '../lib/api/client'
-import { getHealth, type HealthResponse } from '../lib/api/health'
+import { describeConnection, getHealth, resolveApiBaseUrl } from '../lib/api'
+import type { HealthResponse } from '../lib/api/health'
 
 type HealthState =
   | { status: 'loading' }
@@ -38,6 +38,8 @@ const roadmap = [
 
 export function HomePage() {
   const [health, setHealth] = useState<HealthState>({ status: 'loading' })
+  const connection = describeConnection()
+  const endpoint = resolveApiBaseUrl()
 
   useEffect(() => {
     const controller = new AbortController()
@@ -125,10 +127,24 @@ export function HomePage() {
             <>
               <p className="status-message status-error">无法连接后端</p>
               <p className="status-detail">{health.message}</p>
+              <NavLink className="text-link" to="/settings/connection">
+                前往连接设置
+              </NavLink>
             </>
           )}
 
-          <code className="endpoint">GET {API_BASE_URL}/health</code>
+          {!endpoint && (
+            <p className="status-message status-error">
+              尚未配置服务器地址，手机端请先填写电脑的局域网地址。
+            </p>
+          )}
+
+          <code className="endpoint">
+            {endpoint ? `GET ${endpoint}/health` : '未配置服务器地址'}
+          </code>
+          {connection.environment === 'android' && (
+            <p className="status-detail">手机 App 环境</p>
+          )}
         </aside>
       </section>
 

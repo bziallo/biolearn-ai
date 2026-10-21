@@ -1,21 +1,9 @@
-function resolveBaseUrl(): string {
-  const configured = import.meta.env.VITE_API_BASE_URL?.trim()
-  if (configured) {
-    return configured.replace(/\/+$/, '')
-  }
-  // Same-origin deployment: FastAPI serves the built SPA on one port, so the
-  // API lives under the same origin. Vite dev sets a fixed URL via .env.
-  if (
-    typeof window !== 'undefined' &&
-    typeof window.location?.origin === 'string' &&
-    window.location.origin.startsWith('http')
-  ) {
-    return `${window.location.origin}/api/v1`
-  }
-  return 'http://127.0.0.1:8000/api/v1'
-}
+import {
+  getAccessToken,
+  resolveApiBaseUrl,
+} from './connection'
 
-export const API_BASE_URL = resolveBaseUrl()
+export let API_BASE_URL = resolveApiBaseUrl()
 
 export class ApiError extends Error {
   readonly status?: number
@@ -34,6 +22,12 @@ export async function apiRequest<T>(
   init: RequestInit = {},
   timeoutMs = 8_000,
 ): Promise<T> {
+  const baseUrl = resolveApiBaseUrl()
+  if (!baseUrl) {
+    throw new ApiError(
+      '尚未连接服务器：请打开“连接设置”，填写电脑后端的局域网地址，例如 http://192.168.1.10:8000/api/v1',
+    )
+  }
   const controller = new AbortController()
   const abortFromCaller = () => controller.abort()
 
@@ -52,12 +46,33 @@ export async function apiRequest<T>(
     if (!headers.has('Accept')) {
       headers.set('Accept', 'application/json')
     }
+    const token = getAccessToken()
+    if (token && !headers.has('X-BioLearn-Token')) {
+      headers.set('X-BioLearn-Token', token)
+    }
 
-    const response = await fetch(`${API_BASE_URL}${path}`, {
-      ...init,
-      headers,
-      signal: controller.signal,
-    })
+    let response: Response
+    try {
+      response = await fetch(`${baseUrl}${path}`, {
+        ...init,
+        headers,
+        signal: controller.signal,
+      })
+    } catch (networkError) {
+      if (controller.signal.aborted) {
+        throw networkError
+      }
+      throw new ApiError(
+        `无法连接服务器 ${baseUrl}。请确认电脑端后端已启动、手机与电脑在同一 Wi-Fi，并检查局域网监听与防火墙设置。`,
+      )
+    }
+
+    if (response.status === 401) {
+      throw new ApiError(
+        '需要访问口令：请在“连接设置”中填写与电脑端一致的共享口令',
+        401,
+      )
+    }
 
     if (!response.ok) {
       const text = await response.text()
@@ -117,6 +132,15 @@ export function getErrorMessage(error: unknown): string {
     return error.message
   }
   return '发生未知错误'
+}
+
+/** Re-read the connection settings after the user edits them. */
+export function refreshConnection(): void {
+  const next = resolveApiBaseUrl()
+  if (next) {
+    // Keep the exported constant useful for diagnostics in settings screens.
+    API_BASE_URL = next
+  }
 }
 
 export function getErrorDetail(
