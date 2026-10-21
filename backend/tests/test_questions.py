@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.enums import QuestionStatus, QuestionType
@@ -22,7 +25,13 @@ from app.schemas.question import (
 from app.services import practice as practice_service
 from app.services import question_generation
 from app.services import questions as question_service
-from app.services.ai_client import AIClientCancelled, AIClientError
+from app.services.ai_client import (
+    AIClientCancelled,
+    AIClientError,
+    _error_kind,
+    _safe_provider_error,
+    extract_json_object,
+)
 
 
 class FakeAI:
@@ -718,3 +727,336 @@ def test_practice_grading_wrong_questions_and_manual_short_answer(
         )
         assert retry.questions
         assert retry.questions[0].id == single.id
+
+
+def test_generation_normalizes_scalar_true_false_answer(
+    session_factory,
+    app_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real model returns ``"answer": true`` for true/false questions."""
+
+    context = make_context(session_factory)
+    monkeypatch.setattr(
+        question_generation,
+        "effective_ai_settings",
+        lambda _settings=None: app_settings,
+    )
+    with session_factory() as db:
+        job = question_generation.create_generation_job(
+            db,
+            subject_id=context["subject_id"],
+            knowledge_point_ids=context["approved_ids"],
+            types=[QuestionType.TRUE_FALSE],
+            count=1,
+            settings=app_settings,
+        )
+    fake = FakeAI(
+        [
+            {
+                "questions": [
+                    {
+                        "type": "true_false",
+                        "stem": "蛋白质变性后生物活性丧失。",
+                        "options": [],
+                        # Scalar, not {"boolean": ...}: this is what DeepSeek
+                        # actually returned and what used to fail validation.
+                        "answer": True,
+                        "explanation": "变性破坏空间结构，导致生物活性丧失。",
+                        "difficulty": "简单",
+                        "knowledge_point_ids": [context["approved_ids"][0]],
+                    }
+                ]
+            }
+        ]
+    )
+    question_generation.run_generation(
+        job.id,
+        session_factory=session_factory,
+        client=fake,
+        settings=app_settings,
+    )
+    with session_factory() as db:
+        stored = question_generation.get_job_or_404(db, job.id)
+        assert stored.status == "completed", stored.error
+        question = db.query(Question).one()
+        assert question.type == "true_false"
+        assert question.answer == {"boolean": True}
+        assert [item["key"] for item in question.options] == ["T", "F"]
+        assert question.difficulty == "easy"
+
+
+def test_generation_repairs_invalid_shape_once(
+    session_factory,
+    app_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = make_context(session_factory)
+    monkeypatch.setattr(
+        question_generation,
+        "effective_ai_settings",
+        lambda _settings=None: app_settings,
+    )
+    with session_factory() as db:
+        job = question_generation.create_generation_job(
+            db,
+            subject_id=context["subject_id"],
+            knowledge_point_ids=context["approved_ids"],
+            types=[QuestionType.SINGLE_CHOICE],
+            count=1,
+            settings=app_settings,
+        )
+    fake = FakeAI(
+        [
+            {"questions": [{"type": "single_choice", "stem": "缺少字段的题目"}]},
+            {
+                "questions": [
+                    generated_single(
+                        "蛋白质一级结构由什么决定？",
+                        context["approved_ids"][0],
+                    )
+                ]
+            },
+        ]
+    )
+    question_generation.run_generation(
+        job.id,
+        session_factory=session_factory,
+        client=fake,
+        settings=app_settings,
+    )
+    with session_factory() as db:
+        stored = question_generation.get_job_or_404(db, job.id)
+        assert stored.status == "completed", stored.error
+        assert stored.timings["format_repairs"] == 1
+        assert db.query(Question).count() == 1
+    assert len(fake.calls) == 2
+
+
+def test_generation_fails_after_one_repair_with_field_detail(
+    session_factory,
+    app_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = make_context(session_factory)
+    monkeypatch.setattr(
+        question_generation,
+        "effective_ai_settings",
+        lambda _settings=None: app_settings,
+    )
+    with session_factory() as db:
+        job = question_generation.create_generation_job(
+            db,
+            subject_id=context["subject_id"],
+            knowledge_point_ids=context["approved_ids"],
+            types=[QuestionType.SINGLE_CHOICE],
+            count=1,
+            settings=app_settings,
+        )
+    invalid = {"questions": [{"type": "single_choice", "stem": "缺少字段的题目"}]}
+    fake = FakeAI([invalid, invalid])
+    question_generation.run_generation(
+        job.id,
+        session_factory=session_factory,
+        client=fake,
+        settings=app_settings,
+    )
+    with session_factory() as db:
+        stored = question_generation.get_job_or_404(db, job.id)
+        assert stored.status == "failed"
+        assert "字段校验" in (stored.error or "")
+        assert stored.generated_count == 0
+        assert db.query(Question).count() == 0
+        assert stored.timings["format_repairs"] == 1
+        assert stored.timings["error_kind"] == "bad_shape"
+    # The repair budget is bounded: exactly one extra call, never a loop.
+    assert len(fake.calls) == 2
+
+
+def test_generation_skips_one_invalid_draft_and_keeps_valid(
+    session_factory,
+    app_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = make_context(session_factory)
+    monkeypatch.setattr(
+        question_generation,
+        "effective_ai_settings",
+        lambda _settings=None: app_settings,
+    )
+    with session_factory() as db:
+        job = question_generation.create_generation_job(
+            db,
+            subject_id=context["subject_id"],
+            knowledge_point_ids=context["approved_ids"],
+            types=[QuestionType.SINGLE_CHOICE],
+            count=1,
+            settings=app_settings,
+        )
+    fake = FakeAI(
+        [
+            {
+                "questions": [
+                    generated_single(
+                        "蛋白质一级结构由什么决定？",
+                        context["approved_ids"][0],
+                    ),
+                    {
+                        "type": "multiple_choice",
+                        "stem": "未请求的题型应当被跳过。",
+                        "options": [
+                            {"key": "A", "text": "甲"},
+                            {"key": "B", "text": "乙"},
+                        ],
+                        "answer": {"choices": ["A"]},
+                        "explanation": "这是一道未请求的多选题。",
+                        "difficulty": "medium",
+                        "knowledge_point_ids": [context["approved_ids"][0]],
+                    },
+                ]
+            }
+        ]
+    )
+    question_generation.run_generation(
+        job.id,
+        session_factory=session_factory,
+        client=fake,
+        settings=app_settings,
+    )
+    with session_factory() as db:
+        stored = question_generation.get_job_or_404(db, job.id)
+        assert stored.status == "completed", stored.error
+        assert stored.generated_count == 1
+        assert stored.skipped_count == 1
+        assert any("未请求的题型" in item for item in stored.timings["warnings"])
+        assert db.query(Question).count() == 1
+
+
+def test_generation_reports_timeout_category_without_leaking_detail(
+    session_factory,
+    app_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = make_context(session_factory)
+    monkeypatch.setattr(
+        question_generation,
+        "effective_ai_settings",
+        lambda _settings=None: app_settings,
+    )
+    with session_factory() as db:
+        job = question_generation.create_generation_job(
+            db,
+            subject_id=context["subject_id"],
+            knowledge_point_ids=context["approved_ids"],
+            types=[QuestionType.SINGLE_CHOICE],
+            count=1,
+            settings=app_settings,
+        )
+    question_generation.run_generation(
+        job.id,
+        session_factory=session_factory,
+        client=FakeAI(
+            [
+                AIClientError(
+                    "AI 请求超时（超过 1 秒），请稍后重试",
+                    kind="timeout",
+                )
+            ]
+        ),
+        settings=app_settings,
+    )
+    with session_factory() as db:
+        stored = question_generation.get_job_or_404(db, job.id)
+        assert stored.status == "failed"
+        assert "超时" in (stored.error or "")
+        assert stored.timings["error_kind"] == "timeout"
+        assert db.query(Question).count() == 0
+
+
+def test_extract_json_object_handles_fences_and_prose() -> None:
+    assert extract_json_object('```json\n{"questions": []}\n```') == {
+        "questions": []
+    }
+    assert extract_json_object(
+        '下面是结果：\n{"questions": [{"stem": "题干"}]}\n以上。'
+    ) == {"questions": [{"stem": "题干"}]}
+    assert extract_json_object('{"a": {"b": 2}} trailing') == {"a": {"b": 2}}
+    with pytest.raises(ValueError):
+        extract_json_object("这不是 JSON")
+
+
+def test_provider_errors_are_classified_distinctly() -> None:
+    def response(status: int, payload: dict[str, Any]) -> httpx.Response:
+        return httpx.Response(status, json=payload)
+
+    assert "余额" in _safe_provider_error(
+        response(402, {"error": {"code": "insufficient_quota"}})
+    )
+    assert "速率限制" in _safe_provider_error(
+        response(429, {"error": {"code": "rate_limit_exceeded"}})
+    )
+    assert "认证失败" in _safe_provider_error(
+        response(401, {"error": {"code": "invalid_api_key"}})
+    )
+    assert "暂时不可用" in _safe_provider_error(response(503, {}))
+    assert "上下文" in _safe_provider_error(
+        response(400, {"error": {"code": "context_length_exceeded"}})
+    )
+    assert _error_kind(402) == "quota"
+    assert _error_kind(429) == "rate_limit"
+    assert _error_kind(503) == "server"
+    assert _error_kind(400) == "bad_request"
+
+
+def test_generation_reports_database_write_failure_distinctly(
+    session_factory,
+    app_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = make_context(session_factory)
+    monkeypatch.setattr(
+        question_generation,
+        "effective_ai_settings",
+        lambda _settings=None: app_settings,
+    )
+    with session_factory() as db:
+        job = question_generation.create_generation_job(
+            db,
+            subject_id=context["subject_id"],
+            knowledge_point_ids=context["approved_ids"],
+            types=[QuestionType.SINGLE_CHOICE],
+            count=1,
+            settings=app_settings,
+        )
+
+    original_add = Session.add
+
+    def failing_add(self, instance, *args, **kwargs):
+        if instance.__class__.__name__ == "Question":
+            raise SQLAlchemyError("simulated write failure")
+        return original_add(self, instance, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "add", failing_add)
+    question_generation.run_generation(
+        job.id,
+        session_factory=session_factory,
+        client=FakeAI(
+            [
+                {
+                    "questions": [
+                        generated_single(
+                            "蛋白质一级结构由什么决定？",
+                            context["approved_ids"][0],
+                        )
+                    ]
+                }
+            ]
+        ),
+        settings=app_settings,
+    )
+    with session_factory() as db:
+        stored = question_generation.get_job_or_404(db, job.id)
+        assert stored.status == "failed"
+        assert "保存到数据库失败" in (stored.error or "")
+        assert stored.timings["error_kind"] == "database"
+        assert db.query(Question).count() == 0
