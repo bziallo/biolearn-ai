@@ -5,9 +5,13 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.config import BACKEND_DIR, get_settings
+from app.core.config import BACKEND_DIR, PORTABLE_ROOT, get_settings
 
 settings = get_settings()
+# Source checkout: backend/. Portable build: the distribution root (app/, data/, python/).
+DATA_ROOT = PORTABLE_ROOT if PORTABLE_ROOT != BACKEND_DIR.parent else BACKEND_DIR
+if DATA_ROOT != BACKEND_DIR and not (BACKEND_DIR / "data").exists():
+    BACKEND_DIR = DATA_ROOT
 
 
 def resolve_sqlite_path(database_url: str) -> Path | None:

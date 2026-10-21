@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import app.main as app_main
 import app.models  # noqa: F401
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.db.base import Base
 from app.db.session import build_engine, get_db
 from app.main import app
@@ -56,11 +56,20 @@ def app_settings(tmp_path: Path) -> Settings:
 def client(
     session_factory: sessionmaker[Session],
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> Generator[TestClient, None, None]:
     # The lifespan hook normally marks interrupted real tasks as failed. Tests
     # must never touch the real database, so neutralize that startup recovery
     # here; recovery itself is covered directly in test_knowledge.py.
     monkeypatch.setattr(app_main, "recover_interrupted_tasks", lambda: None)
+    # Never read the developer's real backend/data/ai_config.json (it holds a
+    # live API key); point it at a non-existent temp file so "unconfigured"
+    # tests stay deterministic.
+    monkeypatch.setenv("AI_CONFIG_PATH", str(tmp_path / "no-ai-config.json"))
+    monkeypatch.setenv("AI_API_KEY", "")
+    monkeypatch.setenv("AI_API_BASE", "")
+    monkeypatch.setenv("AI_MODEL", "")
+    get_settings.cache_clear()
 
     def override_get_db() -> Generator[Session, None, None]:
         with session_factory() as session:
@@ -72,3 +81,4 @@ def client(
             yield test_client
     finally:
         app.dependency_overrides.clear()
+        get_settings.cache_clear()

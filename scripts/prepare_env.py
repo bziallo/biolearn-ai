@@ -20,6 +20,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
+# Portable build keeps app/ and data/ directly next to the scripts folder.
+if not (BACKEND / "app").is_dir():
+    BACKEND = ROOT
 DATA = BACKEND / "data"
 
 

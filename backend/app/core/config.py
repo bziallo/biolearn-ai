@@ -5,6 +5,8 @@ from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
+# Source checkout: backend/app/core -> backend. Portable build: app/core -> dist root.
+PORTABLE_ROOT = BACKEND_DIR.parent
 PROJECT_ROOT = BACKEND_DIR.parent
 
 

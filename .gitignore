@@ -43,6 +43,7 @@ _start_silent.bat
 # Node.js and frontend build output
 node_modules/
 dist/
+build/
 frontend/coverage/
 .vite/
 *.tsbuildinfo
