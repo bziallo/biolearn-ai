@@ -1,3 +1,4 @@
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from app.api.errors import domain_error_handler, validation_error_handler
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.errors import DomainError
+from app.core.security import AccessTokenMiddleware
 from app.services.recovery import recover_interrupted_tasks
 
 
@@ -65,6 +67,22 @@ def _mount_frontend(application: FastAPI, dist_dir: Path, api_prefix: str) -> No
         return FileResponse(index_file)
 
 
+def _origin_pattern(settings) -> str:
+    """Allow loopback, the Capacitor shell and explicitly listed LAN origins."""
+
+    parts = [
+        r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+        r"https://localhost(:\d+)?",
+        r"capacitor://localhost",
+    ]
+    for origin in settings.cors_origins + settings.cors_extra_origins:
+        escaped = re.escape(origin.strip().rstrip("/"))
+        pattern = f"{escaped}(:\\d+)?"
+        if pattern not in parts:
+            parts.append(pattern)
+    return "|".join(f"(?:{part})" for part in parts)
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     application = FastAPI(
@@ -76,11 +94,12 @@ def create_app() -> FastAPI:
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
-        allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+        allow_origin_regex=_origin_pattern(settings),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    application.add_middleware(AccessTokenMiddleware)
     application.add_exception_handler(DomainError, domain_error_handler)
     application.add_exception_handler(
         RequestValidationError,

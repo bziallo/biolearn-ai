@@ -36,8 +36,17 @@ class Settings(BaseSettings):
         default_factory=lambda: [
             "http://localhost:5173",
             "http://127.0.0.1:5173",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
         ]
     )
+    # Capacitor ships the web build on https://localhost; LAN origins opt in.
+    cors_extra_origins: list[str] = Field(default_factory=list)
+    # Shared access token for LAN/external use. Empty keeps the historical
+    # single-machine behaviour (loopback only). Health/docs stay anonymous.
+    access_token: SecretStr | None = None
+    # Explicit opt-in for listening on the LAN; the launcher keeps 127.0.0.1.
+    allow_lan: bool = False
 
     ai_provider: str = "openai-compatible"
     ai_api_base: str = ""
@@ -55,6 +64,13 @@ class Settings(BaseSettings):
     frontend_dist_dir: Path = PROJECT_ROOT / "frontend" / "dist"
     log_level: str = "info"
     log_dir: Path = Path("./data/logs")
+
+    @property
+    def auth_required(self) -> bool:
+        return bool(
+            self.access_token is not None
+            and self.access_token.get_secret_value().strip()
+        )
 
     @property
     def ai_configured(self) -> bool:
