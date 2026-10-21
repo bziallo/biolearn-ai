@@ -65,7 +65,7 @@
 - `last_json_mode_fallback` 记录降级状态与原因；出题任务写入 `timings.json_mode_fallback`。
 - 原有 timeout/network/auth/quota/rate_limit/server 分类保留。
 
-### 测试（`backend/tests/test_ai_client.py`，13 passed）
+### 测试（`backend/tests/test_ai_client.py`，15 passed）
 
 - 422 明确 `response_format is not supported` → 降级一次并成功；
 - 422 `unsupported parameter: response_format` → 降级一次；
