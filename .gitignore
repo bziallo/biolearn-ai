@@ -63,3 +63,14 @@ work/
 Thumbs.db
 .idea/
 .vscode/
+
+# Android / Capacitor build output and signing material
+frontend/android/app/build/
+frontend/android/build/
+frontend/android/.gradle/
+frontend/android/local.properties
+frontend/android/app/release/
+frontend/android/*.jks
+frontend/android/*.keystore
+*.apk
+*.aab
