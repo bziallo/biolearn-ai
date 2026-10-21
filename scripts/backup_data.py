@@ -61,9 +61,15 @@ def main() -> int:
         else str(ROOT / "backups"),
         help="备份根目录",
     )
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="数据目录（默认 backend/data；测试时可指向临时目录）",
+    )
     args = parser.parse_args()
+    data = Path(args.data_dir).expanduser().resolve() if args.data_dir else DATA
 
-    database = DATA / "biolearn.db"
+    database = data / "biolearn.db"
     if not database.is_file():
         print(f"[ERROR] 未找到数据库：{database}")
         print("        请先在项目根目录运行 start.bat 完成初始化。")
@@ -77,7 +83,7 @@ def main() -> int:
     copy_sqlite(database, target / "biolearn.db")
     print(f"[OK]   数据库 -> biolearn.db（SHA-256 {sha256(target / 'biolearn.db')[:16]}…）")
 
-    uploads = DATA / "uploads"
+    uploads = data / "uploads"
     if uploads.is_dir():
         shutil.copytree(uploads, target / "uploads", dirs_exist_ok=True)
         count = sum(1 for _ in (target / "uploads").iterdir())
@@ -85,7 +91,7 @@ def main() -> int:
     else:
         print("[WARN] 没有上传目录，跳过。")
 
-    ai_config = DATA / "ai_config.json"
+    ai_config = data / "ai_config.json"
     if ai_config.is_file():
         shutil.copy2(ai_config, target / "ai_config.json")
         print("[OK]   AI 运行时配置 -> ai_config.json（含密钥，请妥善保管）")

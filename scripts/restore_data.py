@@ -15,6 +15,7 @@ Safety rules:
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import socket
 import sqlite3
@@ -40,7 +41,13 @@ def main() -> int:
     parser.add_argument("backup_dir")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="恢复目标数据目录（默认 backend/data；测试时可指向临时目录）",
+    )
     args = parser.parse_args()
+    data = Path(args.data_dir).expanduser().resolve() if args.data_dir else DATA
 
     source = Path(args.backup_dir).expanduser().resolve()
     database = source / "biolearn.db"
@@ -48,7 +55,7 @@ def main() -> int:
         print(f"[ERROR] 备份目录中没有 biolearn.db：{source}")
         return 1
 
-    if port_in_use("127.0.0.1", args.port):
+    if args.port and port_in_use("127.0.0.1", args.port):
         print(f"[ERROR] 端口 {args.port} 上仍有 BioLearn AI 在运行。")
         print("        请先运行 stop.bat 关闭服务，再执行恢复。")
         return 2
@@ -73,18 +80,18 @@ def main() -> int:
         print(f"[ERROR] 无法打开备份数据库：{exc}")
         return 5
 
-    target_db = DATA / "biolearn.db"
+    target_db = data / "biolearn.db"
     if target_db.exists() and not args.force:
         print(f"[ERROR] 当前数据已存在：{target_db}")
         print("        确认覆盖请加 --force（旧数据会被移动到 _restore_previous_*）。")
         return 6
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    DATA.mkdir(parents=True, exist_ok=True)
-    previous = DATA / f"_restore_previous_{stamp}"
+    data.mkdir(parents=True, exist_ok=True)
+    previous = data / f"_restore_previous_{stamp}"
     previous.mkdir(parents=True, exist_ok=True)
     for name in ("biolearn.db", "uploads", "ai_config.json"):
-        current = DATA / name
+        current = data / name
         if current.exists():
             shutil.move(str(current), str(previous / name))
     print(f"[OK]   旧数据已移动到：{previous}")
@@ -94,13 +101,16 @@ def main() -> int:
 
     uploads = source / "uploads"
     if uploads.is_dir():
-        shutil.copytree(uploads, DATA / "uploads", dirs_exist_ok=True)
+        shutil.copytree(uploads, data / "uploads", dirs_exist_ok=True)
         print("[OK]   上传文件已恢复")
     ai_config = source / "ai_config.json"
     if ai_config.is_file():
-        shutil.copy2(ai_config, DATA / "ai_config.json")
+        shutil.copy2(ai_config, data / "ai_config.json")
         print("[OK]   AI 运行时配置已恢复")
 
+    if args.data_dir:
+        # Ensure alembic upgrades the restored temp DB, not the live one.
+        os.environ["DATABASE_URL"] = f"sqlite:///{target_db.as_posix()}"
     sys.path.insert(0, str(BACKEND))
     try:
         from alembic import command
