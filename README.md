@@ -458,13 +458,27 @@ gradlew.bat assembleDebug
 **安全边界**：默认只监听 `127.0.0.1`；`--lan` 是显式开关。访问口令是单一共享口令，
 不是多用户系统，不要把服务直接暴露到公网。远程部署必须 HTTPS，release 构建默认禁止明文 HTTP。
 
+### Release 签名
+
+- 签名材料（`frontend/android/keystore/`、`keystore.properties`）已被 gitignore，
+  不得提交；**必须离线备份 keystore 与口令**，否则无法升级已安装包。
+- Gradle 只从环境变量或本地 `keystore.properties` 读取：
+  `BIOLEARN_KEYSTORE`、`BIOLEARN_STORE_PASSWORD`、`BIOLEARN_KEY_ALIAS`、
+  `BIOLEARN_KEY_PASSWORD`；没有材料时 `assembleRelease` 仍产出未签名包，Debug 不受影响。
+- 版本号通过 `BIOLEARN_VERSION_CODE` / `BIOLEARN_VERSION_NAME` 注入。
+- **Release 只允许 HTTPS**：Android 9+ 默认阻止明文 HTTP；局域网 HTTP 测试请用 Debug APK。
+- 发布候选验收与 HTTPS 方案：[`docs/PHASE5_RELEASE_READINESS.md`](docs/PHASE5_RELEASE_READINESS.md)
+
 ### 验证记录
 
 - APK 在实体机 PA2553（Android 16）安装并运行，通过 `http://10.61.232.199:8000/api/v1` 在线。
 - 手机新建学科 → 桌面 API 立即可见；桌面新建 → 手机刷新可见。
 - 手机完成 4 题练习（75 分）→ 桌面读取到同一会话的 4 条作答。
+- 阶段五又完成 2 题真机闭环（AI 出题→审核→练习 100 分）；签名 RC 完成安装与原地升级，
+  但 Release 因无 HTTPS 服务器无法联网验证。
 - 指向不可达地址时显示超时排查提示。
-- 详细报告：[`docs/PHASE3_ANDROID.md`](docs/PHASE3_ANDROID.md)
+- 详细报告：[`docs/PHASE3_ANDROID.md`](docs/PHASE3_ANDROID.md)、
+  [`docs/PHASE5_RELEASE_READINESS.md`](docs/PHASE5_RELEASE_READINESS.md)
 
 ### 代码位置
 

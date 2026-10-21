@@ -70,6 +70,8 @@ frontend/android/app/build/
 frontend/android/build/
 frontend/android/.gradle/
 frontend/android/local.properties
+frontend/android/keystore.properties
+frontend/android/keystore/
 frontend/android/app/release/
 frontend/android/*.jks
 frontend/android/*.keystore

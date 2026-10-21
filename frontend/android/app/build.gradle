@@ -1,5 +1,24 @@
 apply plugin: 'com.android.application'
 
+// Release signing is opt-in and never hardcoded. Values come from environment
+// variables or an untracked frontend/android/keystore.properties. If none are
+// present, assembleRelease still produces an unsigned APK (debug workflow is
+// unaffected). Passwords are never printed by this build file.
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
+def releaseStoreFile = System.getenv("BIOLEARN_KEYSTORE") ?: keystoreProperties.getProperty("storeFile")
+def releaseStorePassword = System.getenv("BIOLEARN_STORE_PASSWORD") ?: keystoreProperties.getProperty("storePassword")
+def releaseKeyAlias = System.getenv("BIOLEARN_KEY_ALIAS") ?: keystoreProperties.getProperty("keyAlias")
+def releaseKeyPassword = System.getenv("BIOLEARN_KEY_PASSWORD") ?: keystoreProperties.getProperty("keyPassword")
+def hasReleaseSigning = releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
+
+def buildVersionCode = (System.getenv("BIOLEARN_VERSION_CODE") ?: "1").toInteger()
+def buildVersionName = System.getenv("BIOLEARN_VERSION_NAME") ?: "1.0"
+
 android {
     namespace "ai.biolearn.app"
     compileSdk rootProject.ext.compileSdkVersion
@@ -7,8 +26,8 @@ android {
         applicationId "ai.biolearn.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode buildVersionCode
+        versionName buildVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +35,21 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (hasReleaseSigning) {
+            release {
+                storeFile file(releaseStoreFile)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
     buildTypes {
         release {
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
