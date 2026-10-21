@@ -3498,3 +3498,35 @@ td code {
     padding-top: 10px;
   }
 }
+
+/* Phase 5: keep every mobile button at a 44px touch target. */
+@media (max-width: 860px) {
+  button {
+    min-height: 44px;
+  }
+
+  .text-button,
+  .tree-toggle {
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .chapter-select {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 860px) {
+  button,
+  .mini-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .chapter-actions {
+    gap: 8px;
+  }
+}

@@ -130,8 +130,8 @@ export function AISettingsPage() {
 
   return (
     <div className="ai-settings-page">
-      <Link className="back-link" to="/subjects">
-        ← 返回学科列表
+      <Link className="back-link" to="/">
+        ← 返回首页
       </Link>
 
       <header className="page-heading">
