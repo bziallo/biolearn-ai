@@ -3320,3 +3320,179 @@ td code {
   color: #c9e9d9;
   background: rgba(255, 255, 255, 0.08);
 }
+
+/* ------------------------------------------------------------------ */
+/* Mobile shell: bottom tab bar, safe areas, touch targets            */
+/* ------------------------------------------------------------------ */
+:root {
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top: env(safe-area-inset-top, 0px);
+  --tab-bar-height: 58px;
+}
+
+.tab-bar {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  html,
+  body {
+    /* Keep content clear of notches and the Android status bar. */
+    padding-top: var(--safe-top);
+    overflow-x: hidden;
+  }
+
+  .app-shell {
+    width: 100%;
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+    padding-right: max(12px, env(safe-area-inset-right, 0px));
+    box-sizing: border-box;
+  }
+
+  /* The desktop header nav would wrap into a tall list on phones. */
+  .site-header {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 0;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: rgba(7, 26, 26, 0.92);
+    backdrop-filter: blur(8px);
+  }
+
+  .site-nav {
+    display: none;
+  }
+
+  .site-main {
+    padding: 18px 0 calc(var(--tab-bar-height) + var(--safe-bottom) + 24px);
+    min-width: 0;
+  }
+
+  .site-footer {
+    display: none;
+  }
+
+  .tab-bar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    padding: 4px max(4px, env(safe-area-inset-left, 0px))
+      calc(4px + var(--safe-bottom)) max(4px, env(safe-area-inset-right, 0px));
+    background: rgba(9, 30, 29, 0.97);
+    border-top: 1px solid var(--border);
+    backdrop-filter: blur(10px);
+  }
+
+  .tab-bar-link {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    min-height: 48px;
+    padding: 4px 0;
+    border-radius: 10px;
+    color: var(--muted, #90a99d);
+    text-decoration: none;
+    font-size: 0.68rem;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .tab-bar-icon {
+    font-size: 1.1rem;
+    line-height: 1.2;
+  }
+
+  .tab-bar-link.is-active {
+    color: #8ff0bf;
+    background: rgba(95, 227, 166, 0.12);
+  }
+
+  /* Touch targets:表单/按钮在手机上不低于 44px。 */
+  .button,
+  .mini-button,
+  .nav-link,
+  .tree-row,
+  .question-row,
+  .practice-option,
+  select,
+  input,
+  textarea {
+    min-height: 44px;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 16px; /* iOS/Android 避免聚焦时自动放大 */
+  }
+
+  /* Wide tables and trees must scroll inside their own container. */
+  .external-points,
+  .review-grid,
+  .question-list,
+  .knowledge-tree-panel,
+  .knowledge-editor-panel {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .review-grid,
+  .question-generator-grid,
+  .practice-grid,
+  .import-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .modal {
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 40px - var(--safe-bottom));
+    overflow-y: auto;
+  }
+
+  .modal-body {
+    max-height: calc(100dvh - 140px - var(--safe-bottom));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  /* Keep submit controls reachable while the soft keyboard is open. */
+  .form-actions,
+  .import-actions {
+    position: sticky;
+    bottom: calc(8px + var(--safe-bottom));
+    background: rgba(7, 26, 26, 0.9);
+    padding: 8px 0;
+    border-radius: 12px;
+    z-index: 5;
+  }
+
+  .toast-viewport {
+    bottom: calc(var(--tab-bar-height) + var(--safe-bottom) + 12px);
+  }
+}
+
+@media (min-width: 761px) {
+  .tab-bar {
+    display: none;
+  }
+}
+
+/* Landscape phones: keep the tab bar but reduce vertical chrome. */
+@media (max-height: 480px) and (max-width: 900px) {
+  .tab-bar {
+    display: grid;
+  }
+
+  .site-main {
+    padding-top: 10px;
+  }
+}

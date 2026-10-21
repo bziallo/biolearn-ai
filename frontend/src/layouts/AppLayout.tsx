@@ -6,6 +6,19 @@ function navClassName({ isActive }: { isActive: boolean }) {
   return isActive ? 'nav-link is-active' : 'nav-link'
 }
 
+function tabClassName({ isActive }: { isActive: boolean }) {
+  return isActive ? 'tab-bar-link is-active' : 'tab-bar-link'
+}
+
+const PRIMARY_LINKS = [
+  { to: '/', label: '首页', icon: '🏠', end: true },
+  { to: '/subjects', label: '学科', icon: '📚', end: false },
+  { to: '/import', label: '导入', icon: '⬆', end: false },
+  { to: '/practice', label: '练习', icon: '✎', end: false },
+  { to: '/questions', label: '题库', icon: '▤', end: false },
+  { to: '/settings/connection', label: '连接', icon: '⚙', end: false },
+]
+
 export function AppLayout() {
   return (
     <ToastProvider>
@@ -39,6 +52,9 @@ export function AppLayout() {
             <NavLink className={navClassName} to="/settings/ai">
               AI 设置
             </NavLink>
+            <NavLink className={navClassName} to="/settings/connection">
+              连接设置
+            </NavLink>
             <NavLink className={navClassName} to="/about">
               项目架构
             </NavLink>
@@ -50,9 +66,26 @@ export function AppLayout() {
         </main>
 
         <footer className="site-footer">
-          <span>BioLearn AI · 阶段三</span>
+          <span>BioLearn AI · V1.0</span>
           <span>本地优先 · 可审计 · 按阶段交付</span>
         </footer>
+
+        {/* Mobile-only primary navigation (hidden on wide screens via CSS). */}
+        <nav className="tab-bar" aria-label="底部导航">
+          {PRIMARY_LINKS.map((link) => (
+            <NavLink
+              key={link.to}
+              to={link.to}
+              end={link.end}
+              className={tabClassName}
+            >
+              <span className="tab-bar-icon" aria-hidden="true">
+                {link.icon}
+              </span>
+              <span className="tab-bar-label">{link.label}</span>
+            </NavLink>
+          ))}
+        </nav>
       </div>
     </ToastProvider>
   )
