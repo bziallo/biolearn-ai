@@ -18,15 +18,21 @@ export type ClientEnvironment = 'browser' | 'android'
 const RUNTIME_KEY = 'biolearn.api_base_url'
 const TOKEN_KEY = 'biolearn.access_token'
 
-export function isAndroidShell(): boolean {
+function isAndroidShell(): boolean {
   if (typeof window === 'undefined') {
     return false
   }
   const { protocol, hostname } = window.location
-  return (
-    protocol === 'capacitor:' ||
-    (protocol === 'https:' && hostname === 'localhost' && isCapacitorNative())
-  )
+  if (protocol === 'capacitor:') {
+    return true
+  }
+  // Capacitor serves the bundle from https://localhost: that exact origin can
+  // never be a valid backend address, so treat it as the native shell too.
+  // This must not depend on injected bridges, which are absent at module load.
+  if (protocol === 'android-app:' || (protocol === 'https:' && hostname === 'localhost')) {
+    return true
+  }
+  return isCapacitorNative()
 }
 
 function isCapacitorNative(): boolean {
@@ -73,10 +79,15 @@ function writeStorage(key: string, value: string): void {
 }
 
 function buildTimeDefault(): string {
-  const explicit = trimBase(
-    import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_DEFAULT_API_BASE_URL,
-  )
-  return explicit
+  // VITE_API_BASE_URL is the browser/dev value from the root .env and must
+  // never leak into the APK (it points at the developer machine's loopback).
+  // The Android shell only honours VITE_DEFAULT_API_BASE_URL, which is set
+  // explicitly for a LAN or remote deployment build.
+  const explicit = trimBase(import.meta.env.VITE_DEFAULT_API_BASE_URL)
+  if (isAndroidShell()) {
+    return explicit
+  }
+  return trimBase(import.meta.env.VITE_API_BASE_URL) || explicit
 }
 
 export function currentRuntimeBaseUrl(): string {
@@ -88,12 +99,15 @@ export function resolveApiBaseUrl(): string {
   if (runtime) {
     return runtime
   }
+  // A build-time default is an explicit operator decision (LAN server or a
+  // deployment domain) and is valid in the Android shell too. Only the
+  // implicit same-origin fallback is unsafe there, because the shell origin is
+  // https://localhost rather than a backend.
   const baked = buildTimeDefault()
-  if (baked && !isAndroidShell()) {
+  if (baked) {
     return baked
   }
   if (isAndroidShell()) {
-    // Never treat the packaged asset origin as the backend.
     return ''
   }
   if (
@@ -103,7 +117,9 @@ export function resolveApiBaseUrl(): string {
   ) {
     return `${window.location.origin}/api/v1`
   }
-  return baked || 'http://127.0.0.1:8000/api/v1'
+  // No implicit loopback: a packaged/embedded client must never assume the
+  // developer machine. The UI asks the user to configure a server instead.
+  return ''
 }
 
 export function setRuntimeBaseUrl(value: string): void {
@@ -134,11 +150,11 @@ export function describeConnection(): {
   if (runtime) {
     return { baseUrl: runtime, environment, configured: true, source: 'runtime' }
   }
-  if (environment === 'android') {
-    return { baseUrl: '', environment, configured: Boolean(baked), source: baked ? 'build' : 'unset' }
-  }
   if (baked) {
     return { baseUrl: baked, environment, configured: true, source: 'build' }
+  }
+  if (environment === 'android') {
+    return { baseUrl: '', environment, configured: false, source: 'unset' }
   }
   return {
     baseUrl: resolveApiBaseUrl(),

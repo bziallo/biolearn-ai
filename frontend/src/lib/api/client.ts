@@ -116,7 +116,15 @@ export async function apiRequest<T>(
       throw error
     }
     if (controller.signal.aborted) {
-      throw new ApiError('请求超时或已取消')
+      // Distinguish a caller cancel from our own timeout: only the timeout is
+      // worth showing connection guidance for.
+      if (init.signal?.aborted) {
+        throw new ApiError('请求已取消')
+      }
+      throw new ApiError(
+        `连接超时：${baseUrl} 在 ${Math.round(timeoutMs / 1000)} 秒内没有响应。` +
+          '请确认电脑端后端已启动、手机与电脑在同一 Wi-Fi，并检查局域网监听与防火墙设置。',
+      )
     }
     throw new ApiError(
       error instanceof Error ? error.message : '网络请求失败',

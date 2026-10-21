@@ -3334,7 +3334,9 @@ td code {
   display: none;
 }
 
-@media (max-width: 760px) {
+/* Phones and small tablets: 1968px @ 400dpi reports ~787 CSS px, which a
+   760px breakpoint would miss. 860px keeps normal desktops on the old layout. */
+@media (max-width: 860px) {
   html,
   body {
     /* Keep content clear of notches and the Android status bar. */
@@ -3480,7 +3482,7 @@ td code {
   }
 }
 
-@media (min-width: 761px) {
+@media (min-width: 861px) {
   .tab-bar {
     display: none;
   }
