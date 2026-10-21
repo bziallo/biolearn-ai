@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from typing import Any
 
 from pydantic import ValidationError
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -29,6 +31,7 @@ from app.models import (
 )
 from app.schemas.question import (
     GeneratedQuestionBatch,
+    GeneratedQuestionDraft,
     QuestionGenerationJobRead,
 )
 from app.services import job_control, questions
@@ -46,6 +49,62 @@ logger = logging.getLogger(__name__)
 BATCH_SIZE = 5
 MAX_MODEL_CALLS = 4
 MAX_PROMPT_POINTS = 12
+# One repair call per job: enough for a malformed field, bounded in cost.
+MAX_FORMAT_REPAIRS = 1
+
+
+class AIOutputFormatError(AIClientError):
+    """Model output could not be turned into valid question drafts."""
+
+    def __init__(self, message: str, *, detail: str = "") -> None:
+        super().__init__(message, kind="bad_shape", error_code="bad_shape")
+        self.detail = detail
+
+
+TYPE_ALIASES = {
+    "single_choice": "single_choice",
+    "single-choice": "single_choice",
+    "singlechoice": "single_choice",
+    "single": "single_choice",
+    "单选": "single_choice",
+    "单选题": "single_choice",
+    "multiple_choice": "multiple_choice",
+    "multiple-choice": "multiple_choice",
+    "multiplechoice": "multiple_choice",
+    "multiple": "multiple_choice",
+    "multi": "multiple_choice",
+    "多选": "multiple_choice",
+    "多选题": "multiple_choice",
+    "true_false": "true_false",
+    "true-false": "true_false",
+    "truefalse": "true_false",
+    "boolean": "true_false",
+    "judgment": "true_false",
+    "judge": "true_false",
+    "判断": "true_false",
+    "判断题": "true_false",
+    "short_answer": "short_answer",
+    "short-answer": "short_answer",
+    "shortanswer": "short_answer",
+    "short": "short_answer",
+    "essay": "short_answer",
+    "简答": "short_answer",
+    "简答题": "short_answer",
+}
+DIFFICULTY_ALIASES = {
+    "easy": "easy",
+    "简单": "easy",
+    "基础": "easy",
+    "medium": "medium",
+    "中等": "medium",
+    "一般": "medium",
+    "hard": "hard",
+    "困难": "hard",
+    "难": "hard",
+}
+TRUE_VALUES = {"true", "t", "yes", "y", "1", "正确", "对", "是"}
+FALSE_VALUES = {"false", "f", "no", "n", "0", "错误", "错", "否"}
+
 
 
 def _subject_or_404(db: Session, subject_id: str) -> Subject:
@@ -270,12 +329,231 @@ def _generation_prompt(
 }}
 
 规则：
-1. 单选题 answer.choices 恰好一个；多选题至少一个；判断题 answer 使用 boolean；简答题 answer 使用 text，options 为空。
-2. 选择题选项 key 不重复、内容不重复，答案 key 必须存在。
+1. answer 必须是对象，不能是布尔、字符串或数组：
+   - 单选题：{{"choices": ["A"]}}，恰好一个；
+   - 多选题：{{"choices": ["A", "C"]}}，至少一个；
+   - 判断题：{{"boolean": true}} 或 {{"boolean": false}}，options 可为 [] 或 [{{"key":"T","text":"正确"}},{{"key":"F","text":"错误"}}]；
+   - 简答题：{{"text": "参考答案"}}，options 必须为 []。
+2. 选择题选项 key 不重复、内容不重复，答案 key 必须存在于 options。
 3. 每道题至少关联一个给定知识点 id。
 4. 不要输出 JSON 之外的文字。
 """.strip()
     return system, user
+
+
+def _text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _coerce_type(value: Any) -> str | None:
+    return TYPE_ALIASES.get(_text(value).lower())
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    text = _text(value).lower()
+    if text in TRUE_VALUES:
+        return True
+    if text in FALSE_VALUES:
+        return False
+    return None
+
+
+def _choice_keys(value: Any) -> list[str]:
+    if isinstance(value, str):
+        parts = re.split(r"[,，、;；/\s]+", value.strip())
+    elif isinstance(value, (list, tuple, set)):
+        parts = [str(item) for item in value]
+    else:
+        parts = []
+    return list(dict.fromkeys(part.strip().upper() for part in parts if part.strip()))
+
+
+def _coerce_options(raw: Any) -> list[dict[str, str]]:
+    if raw is None:
+        return []
+    if isinstance(raw, dict):
+        items = [
+            {"key": key, "text": text}
+            for key, text in raw.items()
+        ]
+    elif isinstance(raw, list):
+        items = []
+        for index, item in enumerate(raw):
+            if isinstance(item, dict):
+                items.append(
+                    {
+                        "key": item.get("key") or item.get("label") or chr(65 + index),
+                        "text": item.get("text")
+                        or item.get("content")
+                        or item.get("value"),
+                    }
+                )
+            else:
+                items.append({"key": chr(65 + index), "text": item})
+    else:
+        return []
+
+    options: list[dict[str, str]] = []
+    for index, item in enumerate(items[:8]):
+        options.append(
+            {
+                "key": _text(item.get("key")) or chr(65 + index),
+                "text": _text(item.get("text")),
+            }
+        )
+    return options
+
+
+def _coerce_answer(question_type: str, raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        if question_type in {"single_choice", "multiple_choice"}:
+            choices = raw.get("choices")
+            if choices is None:
+                choices = raw.get("choice_keys") or raw.get("keys")
+            if choices is None and "answer" in raw:
+                choices = raw["answer"]
+            return {"choices": _choice_keys(choices)}
+        if question_type == "true_false":
+            if "boolean" in raw:
+                value = _coerce_bool(raw["boolean"])
+            elif "value" in raw:
+                value = _coerce_bool(raw["value"])
+            elif "answer" in raw:
+                value = _coerce_bool(raw["answer"])
+            elif "choices" in raw:
+                keys = _choice_keys(raw["choices"])
+                value = True if keys[:1] in (["T"], ["TRUE"]) else False if keys[:1] in (["F"], ["FALSE"]) else None
+            else:
+                value = None
+            return {"boolean": value} if value is not None else {}
+        # short answer is free text; never invent one
+        text = raw.get("text") or raw.get("answer") or ""
+        return {"text": _text(text)}
+
+    if isinstance(raw, bool):
+        return {"boolean": raw} if question_type == "true_false" else {}
+    if isinstance(raw, (int, float)) and question_type == "true_false":
+        value = _coerce_bool(raw)
+        return {"boolean": value} if value is not None else {}
+    if isinstance(raw, str):
+        if question_type == "true_false":
+            value = _coerce_bool(raw)
+            return {"boolean": value} if value is not None else {}
+        if question_type in {"single_choice", "multiple_choice"}:
+            return {"choices": _choice_keys(raw)}
+        return {"text": raw.strip()}
+    if isinstance(raw, (list, tuple, set)):
+        if question_type in {"single_choice", "multiple_choice"}:
+            return {"choices": _choice_keys(raw)}
+        return {}
+    return {}
+
+
+def _normalize_draft(
+    item: Any,
+    *,
+    allowed_point_ids: set[str],
+) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        raise ValueError("题目不是对象")
+    question_type = _coerce_type(item.get("type"))
+    if question_type is None:
+        raise ValueError(f"不支持的题型：{_text(item.get('type')) or '缺失'}")
+    stem = _text(item.get("stem") or item.get("question"))
+    explanation = _text(item.get("explanation") or item.get("analysis"))
+    options = _coerce_options(item.get("options"))
+    if question_type == "short_answer":
+        options = []
+    if question_type == "true_false" and options:
+        # Keep T/F options only if they use the canonical keys; otherwise the
+        # DB will add the standard 正确/错误 pair.
+        keys = {option["key"].upper() for option in options}
+        if keys != {"T", "F"}:
+            options = []
+    answer = _coerce_answer(question_type, item.get("answer"))
+    raw_points = item.get("knowledge_point_ids")
+    if isinstance(raw_points, str):
+        raw_points = [raw_points]
+    point_ids = [
+        _text(point_id)
+        for point_id in (raw_points or [])
+        if _text(point_id)
+    ]
+    if not point_ids and len(allowed_point_ids) == 1:
+        point_ids = list(allowed_point_ids)
+    difficulty = DIFFICULTY_ALIASES.get(_text(item.get("difficulty")).lower(), "medium")
+    confidence = item.get("confidence")
+    if not isinstance(confidence, (int, float)) or not 0 <= float(confidence) <= 1:
+        confidence = None
+    return {
+        "type": question_type,
+        "stem": stem,
+        "options": options,
+        "answer": answer,
+        "explanation": explanation,
+        "difficulty": difficulty,
+        "knowledge_point_ids": point_ids,
+        "confidence": confidence,
+    }
+
+
+def _parse_generated_batch(
+    raw: Any,
+    *,
+    allowed_point_ids: set[str],
+) -> tuple[GeneratedQuestionBatch, list[str], int]:
+    """Normalise tolerant shapes, then validate each draft independently.
+
+    A malformed draft is skipped and reported; it is never coerced into a
+    question with invented fields. Raises when every draft is unusable.
+    """
+
+    if isinstance(raw, list):
+        raw = {"questions": raw}
+    if not isinstance(raw, dict):
+        raise AIOutputFormatError("AI 返回的 JSON 顶层不是对象")
+    raw_questions = raw.get("questions")
+    if isinstance(raw_questions, dict):
+        raw_questions = [raw_questions]
+    if raw_questions is None and ("stem" in raw or "question" in raw):
+        raw_questions = [raw]
+    if not isinstance(raw_questions, list):
+        raise AIOutputFormatError("AI 返回缺少 questions 数组")
+
+    drafts: list[GeneratedQuestionDraft] = []
+    warnings: list[str] = []
+    invalid = 0
+    for index, item in enumerate(raw_questions[:20]):
+        try:
+            normalized = _normalize_draft(item, allowed_point_ids=allowed_point_ids)
+            drafts.append(GeneratedQuestionDraft.model_validate(normalized))
+        except (ValueError, ValidationError) as exc:
+            invalid += 1
+            warnings.append(f"第 {index + 1} 题未通过字段校验：{_short_reason(exc)}")
+
+    if not drafts and raw_questions:
+        detail = "；".join(warnings[:2])[:300]
+        raise AIOutputFormatError(
+            f"AI 返回的 {len(raw_questions)} 道题均未通过字段校验"
+            + (f"（{detail}）" if detail else ""),
+            detail=detail,
+        )
+    return GeneratedQuestionBatch(questions=drafts), warnings, invalid
+
+
+def _short_reason(exc: Exception) -> str:
+    if isinstance(exc, ValidationError):
+        first = exc.errors()[0] if exc.errors() else {}
+        location = ".".join(str(item) for item in first.get("loc", ()))
+        message = str(first.get("msg", "")).strip()
+        return f"{location}: {message}" if location else message
+    return str(exc)
 
 
 def _validated_drafts(
@@ -285,34 +563,40 @@ def _validated_drafts(
     points_by_id: dict[str, KnowledgePoint],
     seen_stems: set[str],
     allowed_types: set[str],
+    warnings: list[str],
 ) -> tuple[list[tuple[questions.ValidatedQuestion, list[KnowledgePoint], float | None]], int]:
     valid: list[tuple[questions.ValidatedQuestion, list[KnowledgePoint], float | None]] = []
     skipped = 0
-    for draft in batch.questions:
-        if draft.type.value not in allowed_types:
-            raise DomainError(
-                422,
-                "question_generation_invalid",
-                f"AI 返回了未请求的题型：{draft.type.value}",
+    for index, draft in enumerate(batch.questions):
+        try:
+            if draft.type.value not in allowed_types:
+                raise DomainError(
+                    422,
+                    "question_generation_invalid",
+                    f"AI 返回了未请求的题型：{draft.type.value}",
+                )
+            if any(point_id not in points_by_id for point_id in draft.knowledge_point_ids):
+                raise DomainError(
+                    422,
+                    "question_generation_invalid",
+                    "AI 返回的题目关联了未提供的知识点",
+                )
+            validated, points = validate_question_data(
+                db,
+                subject_id=job.subject_id,
+                chapter_id=job.chapter_id,
+                knowledge_point_ids=draft.knowledge_point_ids,
+                question_type=draft.type,
+                stem=draft.stem,
+                options=draft.options,
+                answer=draft.answer,
+                explanation=draft.explanation,
+                difficulty=draft.difficulty,
             )
-        if any(point_id not in points_by_id for point_id in draft.knowledge_point_ids):
-            raise DomainError(
-                422,
-                "question_generation_invalid",
-                "AI 返回的题目关联了未提供的知识点",
-            )
-        validated, points = validate_question_data(
-            db,
-            subject_id=job.subject_id,
-            chapter_id=job.chapter_id,
-            knowledge_point_ids=draft.knowledge_point_ids,
-            question_type=draft.type,
-            stem=draft.stem,
-            options=draft.options,
-            answer=draft.answer,
-            explanation=draft.explanation,
-            difficulty=draft.difficulty,
-        )
+        except DomainError as exc:
+            skipped += 1
+            warnings.append(f"第 {index + 1} 题已跳过：{exc.message}")
+            continue
         key = questions.normalize_stem(validated.stem)
         if key in seen_stems or questions.find_duplicate(
             db,
@@ -374,6 +658,26 @@ def run_generation(
             seen_stems: set[str] = set()
             skipped = 0
             calls = 0
+            repairs_used = 0
+            warnings_log: list[str] = []
+
+            def timed_chat(system_text: str, user_text: str) -> dict[str, Any]:
+                nonlocal calls
+                stage_started = time.perf_counter()
+                result = active_client.chat_json(
+                    system_text,
+                    user_text,
+                    cancel_check=lambda: job_control.is_cancel_requested(job_id),
+                )
+                calls += 1
+                timings.setdefault("model_seconds", 0.0)
+                timings["model_seconds"] = round(
+                    float(timings["model_seconds"])
+                    + (time.perf_counter() - stage_started),
+                    3,
+                )
+                return result
+
             while len(collected) < count and calls < MAX_MODEL_CALLS:
                 if job.cancel_requested or job_control.is_cancel_requested(job_id):
                     _mark_cancelled(db, job, timings)
@@ -389,27 +693,54 @@ def run_generation(
                     count=len(batch_types),
                     difficulty=request.get("difficulty"),
                 )
-                stage_started = time.perf_counter()
-                raw = active_client.chat_json(
-                    system,
-                    user,
-                    cancel_check=lambda: job_control.is_cancel_requested(job_id),
-                )
-                timings.setdefault("model_seconds", 0.0)
-                timings["model_seconds"] = round(
-                    float(timings["model_seconds"]) + (time.perf_counter() - stage_started),
-                    3,
-                )
-                calls += 1
                 try:
-                    batch = GeneratedQuestionBatch.model_validate(raw)
-                except ValidationError as exc:
-                    logger.warning(
-                        "Question generation job %s invalid shape: %s",
-                        job.id,
-                        exc.errors()[:3],
+                    raw = timed_chat(system, user)
+                except AIClientError as exc:
+                    if exc.kind == "invalid_json" and repairs_used < MAX_FORMAT_REPAIRS:
+                        repairs_used += 1
+                        timings["format_repairs"] = repairs_used
+                        logger.warning(
+                            "Question generation job %s returned invalid JSON; one repair attempt",
+                            job.id,
+                        )
+                        raw = timed_chat(
+                            system
+                            + "\n\n上次输出不是有效 JSON。只返回一个 JSON 对象，"
+                            "不要 Markdown 代码块，也不要任何解释文字。",
+                            user,
+                        )
+                    else:
+                        raise
+                try:
+                    batch, warnings, invalid = _parse_generated_batch(
+                        raw,
+                        allowed_point_ids=set(points_by_id),
                     )
-                    raise AIClientError(_describe_validation_error(exc)) from exc
+                except AIOutputFormatError as exc:
+                    if repairs_used < MAX_FORMAT_REPAIRS:
+                        repairs_used += 1
+                        timings["format_repairs"] = repairs_used
+                        logger.warning(
+                            "Question generation job %s failed schema validation: %s",
+                            job.id,
+                            exc.detail or exc.message,
+                        )
+                        raw = timed_chat(
+                            system
+                            + "\n\n【字段校验失败】"
+                            + (exc.detail or exc.message)
+                            + "。请严格按上面的 JSON 结构重新输出：answer 必须是对象，"
+                            "判断题使用 {\"boolean\": true}，选择题使用 {\"choices\": [\"A\"]}。",
+                            user,
+                        )
+                        batch, warnings, invalid = _parse_generated_batch(
+                            raw,
+                            allowed_point_ids=set(points_by_id),
+                        )
+                    else:
+                        raise
+                warnings_log.extend(warnings)
+                skipped += invalid
                 if not batch.questions:
                     continue
                 valid, batch_skipped = _validated_drafts(
@@ -419,9 +750,17 @@ def run_generation(
                     points_by_id,
                     seen_stems,
                     set(types),
+                    warnings_log,
                 )
                 collected.extend(valid)
                 skipped += batch_skipped
+                if not valid and batch.questions:
+                    detail = "；".join(warnings_log[-2:])[:300]
+                    raise AIOutputFormatError(
+                        f"AI 返回的 {len(batch.questions)} 道题均未通过语义校验"
+                        + (f"（{detail}）" if detail else ""),
+                        detail=detail,
+                    )
                 job.progress = min(85, 10 + int(75 * len(collected) / count))
                 job.stage = f"已生成 {len(collected)}/{count} 道题"
                 job.generated_count = len(collected)
@@ -432,49 +771,65 @@ def run_generation(
                 _mark_cancelled(db, job, timings)
                 return
             if not collected:
-                raise AIClientError("AI 没有返回可用题目，请稍后重试")
+                detail = "；".join(warnings_log[-2:])[:300]
+                raise AIOutputFormatError(
+                    f"AI 没有返回可用题目（已调用 {calls} 次，跳过 {skipped} 道）",
+                    detail=detail,
+                )
             collected = collected[:count]
-            for validated, points_for_question, confidence in collected:
-                first_point = points_for_question[0]
-                duplicate = questions.find_duplicate(
-                    db,
-                    subject_id=job.subject_id,
-                    stem=validated.stem,
-                )
-                question = Question(
-                    subject_id=job.subject_id,
-                    chapter_id=job.chapter_id or first_point.chapter_id,
-                    source_document_id=first_point.document_id,
-                    generation_job_id=job.id,
-                    type=validated.type,
-                    stem=validated.stem,
-                    options=validated.options,
-                    answer=validated.answer,
-                    grading_rule=validated.grading_rule,
-                    explanation=validated.explanation,
-                    difficulty=validated.difficulty,
-                    status=QuestionStatus.PENDING.value,
-                    origin=QuestionOrigin.AI.value,
-                    source_locator=first_point.source_locator,
-                    ai_provider=job.provider,
-                    ai_model=job.model,
-                    confidence=confidence,
-                    duplicate_of_id=duplicate.id if duplicate else None,
-                    duplicate_reason="题干与已有题目重复" if duplicate else None,
-                    score=1.0,
-                    review_note="AI 生成，候选题目需要人工核验",
-                )
-                question.knowledge_points = points_for_question
-                db.add(question)
-            timings["total_seconds"] = round(time.perf_counter() - started, 3)
-            job.timings = timings
-            job.generated_count = len(collected)
-            job.skipped_count = skipped
-            job.status = QuestionJobStatus.COMPLETED.value
-            job.stage = "题目草稿已生成，等待审核"
-            job.progress = 100
-            job.finished_at = utc_now()
-            db.commit()
+            try:
+                for validated, points_for_question, confidence in collected:
+                    first_point = points_for_question[0]
+                    duplicate = questions.find_duplicate(
+                        db,
+                        subject_id=job.subject_id,
+                        stem=validated.stem,
+                    )
+                    question = Question(
+                        subject_id=job.subject_id,
+                        chapter_id=job.chapter_id or first_point.chapter_id,
+                        source_document_id=first_point.document_id,
+                        generation_job_id=job.id,
+                        type=validated.type,
+                        stem=validated.stem,
+                        options=validated.options,
+                        answer=validated.answer,
+                        grading_rule=validated.grading_rule,
+                        explanation=validated.explanation,
+                        difficulty=validated.difficulty,
+                        status=QuestionStatus.PENDING.value,
+                        origin=QuestionOrigin.AI.value,
+                        source_locator=first_point.source_locator,
+                        ai_provider=job.provider,
+                        ai_model=job.model,
+                        confidence=confidence,
+                        duplicate_of_id=duplicate.id if duplicate else None,
+                        duplicate_reason="题干与已有题目重复" if duplicate else None,
+                        score=1.0,
+                        review_note="AI 生成，候选题目需要人工核验",
+                    )
+                    question.knowledge_points = points_for_question
+                    db.add(question)
+                timings["total_seconds"] = round(time.perf_counter() - started, 3)
+                timings["skipped"] = skipped
+                if warnings_log:
+                    timings["warnings"] = warnings_log[-8:]
+                job.timings = timings
+                job.generated_count = len(collected)
+                job.skipped_count = skipped
+                job.status = QuestionJobStatus.COMPLETED.value
+                job.stage = "题目草稿已生成，等待审核"
+                job.progress = 100
+                job.finished_at = utc_now()
+                db.commit()
+            except SQLAlchemyError as exc:
+                logger.exception("Question persistence failed for job %s", job.id)
+                db.rollback()
+                raise AIClientError(
+                    "题目已生成但保存到数据库失败，请查看服务日志后重试",
+                    kind="database",
+                    error_code="persistence_failed",
+                ) from exc
         except AIClientCancelled:
             db.rollback()
             job = db.get(QuestionGenerationJob, job_id)
@@ -487,9 +842,20 @@ def run_generation(
                 if job.cancel_requested or job_control.is_cancel_requested(job_id):
                     _mark_cancelled(db, job, timings)
                 else:
+                    logger.exception("Question generation job %s failed", job.id)
                     job.status = QuestionJobStatus.FAILED.value
                     job.stage = "失败"
                     job.error = _safe_error(exc)
+                    if isinstance(exc, AIClientError):
+                        timings["error_kind"] = exc.kind
+                        if exc.status_code is not None:
+                            timings["http_status"] = exc.status_code
+                        if exc.error_code:
+                            timings["error_code"] = exc.error_code
+                    else:
+                        timings["error_type"] = type(exc).__name__
+                    if warnings_log:
+                        timings["warnings"] = warnings_log[-8:]
                     job.timings = timings
                     job.finished_at = utc_now()
                     db.commit()
@@ -503,23 +869,6 @@ def _safe_error(exc: Exception) -> str:
     if isinstance(exc, AIClientError):
         return exc.message
     return "出题任务失败，请查看服务日志"
-
-
-def _describe_validation_error(exc: ValidationError) -> str:
-    """Summarise the first schema problems without leaking the full prompt."""
-
-    parts: list[str] = []
-    for error in exc.errors()[:3]:
-        location = ".".join(str(item) for item in error.get("loc", ()))
-        message = str(error.get("msg", "")).strip()
-        parts.append(f"{location}: {message}" if location else message)
-    detail = "；".join(part for part in parts if part)[:300]
-    if not detail:
-        return "AI 出题返回格式不符合要求，请重试。"
-    return (
-        f"AI 出题返回格式不符合要求（{detail}）。"
-        "模型可能输出了 Markdown 代码块或字段不一致，请重试。"
-    )
 
 
 def _mark_cancelled(

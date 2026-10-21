@@ -19,6 +19,7 @@ class AIRuntimeConfig(BaseModel):
     timeout_seconds: float | None = Field(default=None, ge=1)
     max_retries: int | None = Field(default=None, ge=0, le=10)
     temperature: float | None = Field(default=None, ge=0, le=2)
+    json_mode: bool | None = None
 
 
 def config_path(settings: Settings | None = None) -> Path:
@@ -82,6 +83,8 @@ def effective_ai_settings(settings: Settings | None = None) -> Settings:
         updates["ai_max_retries"] = runtime.max_retries
     if runtime.temperature is not None:
         updates["ai_temperature"] = runtime.temperature
+    if runtime.json_mode is not None:
+        updates["ai_json_mode"] = runtime.json_mode
     return base.model_copy(update=updates)
 
 

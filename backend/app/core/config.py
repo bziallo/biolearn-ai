@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     ai_timeout_seconds: float = Field(default=90.0, ge=1)
     ai_max_retries: int = Field(default=2, ge=0, le=10)
     ai_temperature: float = Field(default=0.2, ge=0, le=2)
+    # Ask OpenAI-compatible providers for JSON mode. The client degrades to a
+    # plain prompt when a provider rejects response_format with HTTP 400.
+    ai_json_mode: bool = True
     ai_max_points_per_chunk: int = Field(default=8, ge=1, le=30)
     ai_extraction_concurrency: int = Field(default=3, ge=1, le=8)
     ai_merge_batch_size: int = Field(default=40, ge=2, le=100)

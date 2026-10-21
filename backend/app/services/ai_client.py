@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from typing import Any, Protocol
@@ -15,28 +16,41 @@ logger = logging.getLogger(__name__)
 
 
 class AIClientError(Exception):
+    """Provider/transport/parse failure with a machine-readable category.
+
+    ``kind`` is one of: configuration, timeout, network, auth, quota,
+    rate_limit, server, bad_request, invalid_json, bad_shape, cancelled.
+    Callers surface the message and can store ``kind`` in job timings without
+    exposing prompts or credentials.
+    """
+
     def __init__(
         self,
         message: str,
         *,
         retryable: bool = False,
         status_code: int | None = None,
+        kind: str = "unknown",
+        error_code: str | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.retryable = retryable
         self.status_code = status_code
+        self.kind = kind
+        self.error_code = error_code
 
 
 class AIConfigurationError(AIClientError):
-    pass
+    def __init__(self, message: str) -> None:
+        super().__init__(message, kind="configuration")
 
 
 class AIClientCancelled(AIClientError):
     """Raised when the user asks to stop the current extraction."""
 
     def __init__(self) -> None:
-        super().__init__("AI 任务已停止")
+        super().__init__("AI 任务已停止", kind="cancelled")
 
 
 class AIClientProtocol(Protocol):
@@ -95,6 +109,9 @@ class OpenAICompatibleClient:
         self.base_url = self.settings.ai_api_base.rstrip("/")
         self.model = self.settings.ai_model
         self.api_key = self.settings.ai_api_key.get_secret_value() if self.settings.ai_api_key else ""
+        # Flipped off for the rest of this client's life if the provider
+        # rejects response_format; avoids paying for the same 400 every call.
+        self._json_mode_enabled = bool(self.settings.ai_json_mode)
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -127,10 +144,24 @@ class OpenAICompatibleClient:
                         headers=self._headers(),
                         json=json_body,
                     )
-            except (httpx.TimeoutException, httpx.TransportError) as exc:
+            except httpx.TimeoutException as exc:
                 last_error = AIClientError(
-                    "AI 请求超时或网络不可达",
+                    f"AI 请求超时（超过 {self.settings.ai_timeout_seconds:g} 秒），"
+                    "请稍后重试或减少一次生成的知识点/题目数量",
                     retryable=True,
+                    kind="timeout",
+                )
+                if attempt + 1 < attempts:
+                    if cancel_check is not None and cancel_check():
+                        raise AIClientCancelled() from exc
+                    time.sleep(min(2**attempt, 8))
+                    continue
+                raise last_error from exc
+            except httpx.TransportError as exc:
+                last_error = AIClientError(
+                    "无法连接 AI 服务（网络错误），请检查网络、代理或 AI_API_BASE 地址",
+                    retryable=True,
+                    kind="network",
                 )
                 if attempt + 1 < attempts:
                     if cancel_check is not None and cancel_check():
@@ -152,6 +183,8 @@ class OpenAICompatibleClient:
                 message,
                 retryable=retryable,
                 status_code=status,
+                kind=_error_kind(status),
+                error_code=_provider_error_code(response),
             )
             if not retryable or attempt + 1 >= attempts:
                 raise last_error
@@ -192,25 +225,51 @@ class OpenAICompatibleClient:
         *,
         cancel_check: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
-        response = self._request(
-            "POST",
-            f"{self.base_url}/chat/completions",
-            json_body={
-                "model": self.model,
-                "temperature": self.settings.ai_temperature,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            },
-            cancel_check=cancel_check,
-        )
+        body: dict[str, Any] = {
+            "model": self.model,
+            "temperature": self.settings.ai_temperature,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+        used_json_mode = self._json_mode_enabled
+        if used_json_mode:
+            body["response_format"] = {"type": "json_object"}
+        try:
+            response = self._request(
+                "POST",
+                f"{self.base_url}/chat/completions",
+                json_body=body,
+                cancel_check=cancel_check,
+            )
+        except AIClientError as exc:
+            # Some OpenAI-compatible gateways reject response_format with 400.
+            # Retry once without it, but only for that specific status.
+            if used_json_mode and exc.status_code == 400:
+                logger.info(
+                    "AI provider rejected response_format; retrying without JSON mode"
+                )
+                self._json_mode_enabled = False
+                body.pop("response_format", None)
+                response = self._request(
+                    "POST",
+                    f"{self.base_url}/chat/completions",
+                    json_body=body,
+                    cancel_check=cancel_check,
+                )
+            else:
+                raise
+
         try:
             payload = response.json()
             choice = payload["choices"][0]
             content = choice["message"]["content"]
         except (ValueError, KeyError, IndexError, TypeError) as exc:
-            raise AIClientError("AI 返回结构不符合 OpenAI 兼容格式") from exc
+            raise AIClientError(
+                "AI 返回结构不符合 OpenAI 兼容格式（缺少 choices/message/content）",
+                kind="bad_shape",
+            ) from exc
 
         if isinstance(content, list):
             content = "".join(
@@ -219,18 +278,70 @@ class OpenAICompatibleClient:
                 if isinstance(part, dict)
             )
         if not isinstance(content, str) or not content.strip():
-            raise AIClientError("AI 返回内容为空")
+            raise AIClientError(
+                "AI 返回内容为空（可能是内容过滤或模型提前停止）",
+                kind="bad_shape",
+            )
 
-        text = content.strip()
-        if text.startswith("```"):
-            text = re_fenced_json(text)
         try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise AIClientError("AI 返回内容不是有效 JSON") from exc
+            parsed = extract_json_object(content)
+        except ValueError as exc:
+            raise AIClientError(
+                "AI 返回内容不是有效 JSON（已尝试提取代码块/前后文本）",
+                kind="invalid_json",
+                error_code="invalid_json",
+            ) from exc
         if not isinstance(parsed, dict):
-            raise AIClientError("AI 返回 JSON 顶层必须是对象")
+            raise AIClientError(
+                "AI 返回 JSON 顶层必须是对象",
+                kind="bad_shape",
+            )
         return parsed
+
+
+_FENCE_RE = re.compile(r"```(?:json|JSON)?\s*(.*?)```", re.DOTALL)
+
+
+def extract_json_object(text: str) -> dict[str, Any]:
+    """Extract one JSON object from model text without guessing fields.
+
+    Handles plain JSON, ```json fences, and prose before/after the object.
+    Raises ValueError when no complete object can be decoded, so callers never
+    turn unparseable output into a fake success.
+    """
+
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("empty content")
+
+    candidates: list[str] = []
+    stripped = text.strip()
+    candidates.append(stripped)
+    for match in _FENCE_RE.finditer(text):
+        block = match.group(1).strip()
+        if block:
+            candidates.append(block)
+    if stripped.startswith("```"):
+        candidates.append(re_fenced_json(stripped))
+
+    decoder = json.JSONDecoder()
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            value = None
+        if isinstance(value, dict):
+            return value
+        # Prose or trailing explanations: scan for the first decodable object.
+        for index, char in enumerate(candidate):
+            if char != "{":
+                continue
+            try:
+                value, _ = decoder.raw_decode(candidate, index)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                return value
+    raise ValueError("no json object found")
 
 
 def re_fenced_json(text: str) -> str:
@@ -242,19 +353,60 @@ def re_fenced_json(text: str) -> str:
     return text.strip()
 
 
+def _provider_error_code(response: httpx.Response) -> str | None:
+    """Read only the provider's error code/type, never its message body."""
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if isinstance(error, dict):
+        code = error.get("code") or error.get("type")
+        if isinstance(code, str) and len(code) <= 80:
+            return code
+    code = payload.get("code")
+    return code if isinstance(code, str) and len(code) <= 80 else None
+
+
+def _error_kind(status: int) -> str:
+    if status in {401, 403}:
+        return "auth"
+    if status == 402:
+        return "quota"
+    if status == 404:
+        return "bad_request"
+    if status == 429:
+        return "rate_limit"
+    if status >= 500:
+        return "server"
+    return "bad_request"
+
+
 def _safe_provider_error(response: httpx.Response) -> str:
     status = response.status_code
-    if status in {401, 403}:
+    code = _provider_error_code(response) or ""
+    lowered = code.lower()
+    if status in {401, 403} or "invalid_api_key" in lowered:
         return "AI 认证失败，请检查 AI_API_KEY 是否有效"
+    if status == 402 or "insufficient" in lowered or "quota" in lowered:
+        return "AI 账户余额不足或额度已用尽（HTTP 402），请充值或更换 Key 后重试"
     if status == 404:
-        return "AI 接口不存在，请检查 AI_API_BASE 是否包含正确的 /v1 路径"
-    if status == 429:
-        return "AI 服务触发速率限制，请稍后重试或降低调用频率"
+        return "AI 接口或模型不存在，请检查 AI_API_BASE 是否包含 /v1，以及模型名称是否正确"
+    if status == 429 or "rate_limit" in lowered:
+        return "AI 服务触发速率限制（HTTP 429），请稍后重试或降低调用频率"
     if status >= 500:
         return f"AI 服务暂时不可用（HTTP {status}），可稍后重试"
-    # Never echo provider error bodies: they can contain prompt or document
-    # fragments. Auth, rate-limit, and server failures have explicit messages.
-    return f"AI 请求失败（HTTP {status}），请检查模型名称、请求参数或服务状态"
+    if "context_length" in lowered or "too long" in lowered:
+        return "AI 上下文超过模型上限，请减少一次生成的知识点或题目数量"
+    if "content_filter" in lowered:
+        return "AI 内容被安全策略拦截，请调整知识点表述后重试"
+    # Never echo provider messages: they can contain prompt or document
+    # fragments. Auth, quota, rate-limit, and server failures have explicit
+    # messages above.
+    return f"AI 请求被拒绝（HTTP {status}），请检查模型名称、请求参数或服务状态"
 
 
 def _retry_delay(response: httpx.Response, attempt: int) -> float:
