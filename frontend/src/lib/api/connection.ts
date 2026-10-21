@@ -126,12 +126,41 @@ export function setRuntimeBaseUrl(value: string): void {
   writeStorage(RUNTIME_KEY, trimBase(value))
 }
 
+function readSessionValue(key: string): string {
+  try {
+    return typeof window === 'undefined'
+      ? ''
+      : (window.sessionStorage.getItem(key) ?? '')
+  } catch {
+    return ''
+  }
+}
+
+function writeSessionValue(key: string, value: string): void {
+  try {
+    if (typeof window === 'undefined') {
+      return
+    }
+    if (value) {
+      window.sessionStorage.setItem(key, value)
+    } else {
+      window.sessionStorage.removeItem(key)
+    }
+  } catch {
+    // Storage can be disabled; the session simply will not persist.
+  }
+}
+
 export function getAccessToken(): string {
-  return readStorage(TOKEN_KEY)
+  // Session storage limits persistence on shared browsers; Android release
+  // keeps the value inside the app WebView sandbox.
+  return readSessionValue(TOKEN_KEY) || readStorage(TOKEN_KEY)
 }
 
 export function setAccessToken(value: string): void {
-  writeStorage(TOKEN_KEY, value.trim())
+  const next = value.trim()
+  writeSessionValue(TOKEN_KEY, next)
+  writeStorage(TOKEN_KEY, '')
 }
 
 export function clientEnvironment(): ClientEnvironment {

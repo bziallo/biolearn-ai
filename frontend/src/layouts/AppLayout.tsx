@@ -55,6 +55,12 @@ export function AppLayout() {
             <NavLink className={navClassName} to="/settings/connection">
               连接设置
             </NavLink>
+            <NavLink className={navClassName} to="/admin">
+              成员
+            </NavLink>
+            <NavLink className={navClassName} to="/login">
+              登录
+            </NavLink>
             <NavLink className={navClassName} to="/about">
               项目架构
             </NavLink>

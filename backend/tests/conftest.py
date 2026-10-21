@@ -76,6 +76,7 @@ def client(
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
+    app.state.session_factory = session_factory
     try:
         with TestClient(app) as test_client:
             yield test_client

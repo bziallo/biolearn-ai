@@ -13,6 +13,7 @@ from app.core.enums import (
     QuestionStatus,
     QuestionType,
 )
+from app.core.authz import accessible_subject_ids, ensure_subject_access
 from app.core.errors import DomainError
 from app.db.base import utc_now
 from app.models import (
@@ -56,11 +57,10 @@ def normalize_stem(value: str) -> str:
     return " ".join(value.strip().lower().split())
 
 
-def _get_subject(db: Session, subject_id: str) -> Subject:
-    subject = db.get(Subject, subject_id)
-    if subject is None:
-        raise DomainError(404, "subject_not_found", "学科不存在")
-    return subject
+def _get_subject(
+    db: Session, subject_id: str, *, write: bool = False
+) -> Subject:
+    return ensure_subject_access(db, subject_id, write=write)
 
 
 def _get_chapter(
@@ -356,12 +356,15 @@ def _question_statement():
     )
 
 
-def get_question_or_404(db: Session, question_id: str) -> Question:
+def get_question_or_404(
+    db: Session, question_id: str, *, write: bool = False
+) -> Question:
     question = db.scalar(
         _question_statement().where(Question.id == question_id)
     )
     if question is None:
         raise DomainError(404, "question_not_found", "题目不存在")
+    ensure_subject_access(db, question.subject_id, write=write)
     return question
 
 
@@ -384,6 +387,9 @@ def list_questions(
     offset: int = 0,
 ) -> QuestionListResponse:
     conditions = []
+    allowed = accessible_subject_ids(db)
+    if allowed is not None:
+        conditions.append(Question.subject_id.in_(allowed) if allowed else False)
     if subject_id:
         conditions.append(Question.subject_id == subject_id)
     if chapter_id:
@@ -463,7 +469,7 @@ def _apply_content(
 
 
 def create_question(db: Session, payload: QuestionCreate) -> QuestionRead:
-    subject = _get_subject(db, payload.subject_id)
+    subject = _get_subject(db, payload.subject_id, write=True)
     chapter = _get_chapter(db, payload.chapter_id, payload.subject_id)
     validated, points = _apply_content(
         db,
@@ -516,7 +522,7 @@ def update_question(
     question_id: str,
     payload: QuestionUpdate,
 ) -> QuestionRead:
-    question = get_question_or_404(db, question_id)
+    question = get_question_or_404(db, question_id, write=True)
     data = payload.model_dump(exclude_unset=True)
     if "knowledge_point_ids" in data and data["knowledge_point_ids"] is not None:
         points = load_approved_points(
@@ -601,7 +607,7 @@ def review_question(
     status: QuestionStatus,
     note: str | None = None,
 ) -> QuestionRead:
-    question = get_question_or_404(db, question_id)
+    question = get_question_or_404(db, question_id, write=True)
     question.status = status.value
     question.reviewed_at = utc_now()
     if note is not None:
@@ -632,6 +638,7 @@ def bulk_review(
             "部分题目不存在，请刷新后重试",
         )
     for question in questions:
+        ensure_subject_access(db, question.subject_id, write=True)
         question.status = status.value
         question.reviewed_at = utc_now()
         question.published_at = utc_now() if status == QuestionStatus.APPROVED else None
@@ -648,7 +655,7 @@ def regenerate_question(
     count: int = 1,
     difficulty: QuestionDifficulty | None = None,
 ) -> QuestionGenerationJob:
-    question = get_question_or_404(db, question_id)
+    question = get_question_or_404(db, question_id, write=True)
     from app.services import question_generation
 
     return question_generation.create_generation_job(

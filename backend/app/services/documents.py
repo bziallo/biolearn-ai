@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings, get_settings
 from app.core.enums import DocumentStatus, JobStatus
+from app.core.authz import accessible_subject_ids, ensure_subject_access
 from app.core.errors import DomainError
 from app.db.base import utc_now
 from app.db.session import SessionLocal
@@ -62,11 +63,10 @@ def document_path(document: Document, settings: Settings) -> Path:
     return path
 
 
-def _get_subject_or_404(db: Session, subject_id: str) -> Subject:
-    subject = db.get(Subject, subject_id)
-    if subject is None:
-        raise DomainError(404, "subject_not_found", "学科不存在")
-    return subject
+def _get_subject_or_404(
+    db: Session, subject_id: str, *, write: bool = False
+) -> Subject:
+    return ensure_subject_access(db, subject_id, write=write)
 
 
 def _validate_chapter(
@@ -102,7 +102,7 @@ async def create_document_from_upload(
     return_existing: bool = False,
 ) -> DocumentRead:
     current_settings = settings or get_settings()
-    _get_subject_or_404(db, subject_id)
+    _get_subject_or_404(db, subject_id, write=True)
     _validate_chapter(db, subject_id, chapter_id)
 
     original_name = sanitize_filename(upload.filename or "")
@@ -284,6 +284,9 @@ def list_documents(
     status: str | None = None,
 ) -> list[DocumentRead]:
     statement = select(Document).order_by(Document.uploaded_at.desc())
+    allowed = accessible_subject_ids(db)
+    if allowed is not None:
+        statement = statement.where(Document.subject_id.in_(allowed)) if allowed else statement.where(False)
     if subject_id:
         statement = statement.where(Document.subject_id == subject_id)
     if chapter_id:
@@ -293,10 +296,13 @@ def list_documents(
     return [_document_read(db, document) for document in db.scalars(statement).all()]
 
 
-def get_document(db: Session, document_id: str) -> Document:
+def get_document(
+    db: Session, document_id: str, *, write: bool = False
+) -> Document:
     document = db.get(Document, document_id)
     if document is None:
         raise DomainError(404, "document_not_found", "资料不存在")
+    ensure_subject_access(db, document.subject_id, write=write)
     return document
 
 
@@ -305,10 +311,10 @@ def update_document(
     document_id: str,
     payload: DocumentUpdate,
 ) -> DocumentRead:
-    document = get_document(db, document_id)
+    document = get_document(db, document_id, write=True)
     changed_fields = payload.model_fields_set
     subject_id = payload.subject_id or document.subject_id
-    _get_subject_or_404(db, subject_id)
+    _get_subject_or_404(db, subject_id, write=True)
 
     subject_changed = subject_id != document.subject_id
     if "chapter_id" in changed_fields:
@@ -454,7 +460,7 @@ def _safe_parse_error(exc: Exception) -> str:
 
 
 def reset_document_for_parse(db: Session, document_id: str) -> DocumentRead:
-    document = get_document(db, document_id)
+    document = get_document(db, document_id, write=True)
     if document.status == DocumentStatus.PARSING.value:
         raise DomainError(409, "document_parsing", "资料正在解析中，请稍后")
     if _running_job_count(db, document_id):
@@ -494,7 +500,7 @@ def delete_document(
     settings: Settings | None = None,
 ) -> None:
     current_settings = settings or get_settings()
-    document = get_document(db, document_id)
+    document = get_document(db, document_id, write=True)
     _, point_count, approved_count = _counts(db, document.id)
     running_job = _running_job_count(db, document_id)
     if running_job:

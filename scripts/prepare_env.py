@@ -12,6 +12,7 @@ Migrations in this project only add tables/columns and never drop user data.
 
 from __future__ import annotations
 
+import os
 import shutil
 import sqlite3
 import sys
@@ -90,6 +91,21 @@ def main() -> int:
         )
 
     rev_head = _head_revision(config)
+    if (
+        current != "0010_users_auth"
+        and rev_head == "0010_users_auth"
+        and os.environ.get("BIOLEARN_APPROVE_AUTH_MIGRATION") != "1"
+    ):
+        print("[STOP] 检测到阶段 6B 账户/权限迁移（0009 -> 0010）。")
+        print("       该迁移会新增用户、会话、授权表及归属字段；真实库迁移")
+        print("       必须单独批准，本次未修改数据库。")
+        print("       批准后执行：")
+        print("         set BIOLEARN_APPROVE_AUTH_MIGRATION=1")
+        print("         cd backend")
+        print("         .venv/Scripts/python.exe -m alembic upgrade head")
+        print("         .venv/Scripts/python.exe ../scripts/create_owner.py")
+        print("         .venv/Scripts/python.exe ../scripts/backfill_owner.py --dry-run")
+        return 1
     if current == rev_head:
         print(f"[INFO] 数据库结构已是最新（{current}）。")
         _integrity(db_path)

@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     access_token: SecretStr | None = None
     # Explicit opt-in for listening on the LAN; the launcher keeps 127.0.0.1.
     allow_lan: bool = False
+    # Invitation-based accounts. The first owner is created by a local script;
+    # until a user exists the app keeps the legacy shared-token behaviour.
+    session_ttl_hours: int = Field(default=24, ge=1, le=168)
+    session_idle_hours: int = Field(default=12, ge=1, le=168)
+    invite_ttl_hours: int = Field(default=168, ge=1, le=720)
+    login_max_attempts: int = Field(default=5, ge=1, le=20)
+    login_window_minutes: int = Field(default=15, ge=1, le=1440)
 
     ai_provider: str = "openai-compatible"
     ai_api_base: str = ""

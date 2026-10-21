@@ -8,6 +8,7 @@ from app.core.enums import (
     JobStatus,
     ReviewStatus,
 )
+from app.core.authz import accessible_subject_ids, ensure_subject_access
 from app.core.errors import DomainError
 from app.db.base import utc_now
 from app.models import (
@@ -41,10 +42,13 @@ from app.services.knowledge_common import (
 from app.services.mappers import job_read, point_read
 
 
-def _get_document_or_404(db: Session, document_id: str) -> Document:
+def _get_document_or_404(
+    db: Session, document_id: str, *, write: bool = False
+) -> Document:
     document = db.get(Document, document_id)
     if document is None:
         raise DomainError(404, "document_not_found", "资料不存在")
+    ensure_subject_access(db, document.subject_id, write=write)
     return document
 
 
@@ -110,6 +114,9 @@ def list_knowledge_points(
     offset: int = 0,
 ) -> KnowledgeListResponse:
     conditions = []
+    allowed = accessible_subject_ids(db)
+    if allowed is not None:
+        conditions.append(KnowledgePoint.subject_id.in_(allowed) if allowed else False)
     if document_id:
         conditions.append(KnowledgePoint.document_id == document_id)
     if subject_id:
@@ -163,7 +170,7 @@ def create_manual_point(
     db: Session,
     payload: KnowledgePointCreate,
 ) -> KnowledgePointDetail:
-    document = _get_document_or_404(db, payload.document_id)
+    document = _get_document_or_404(db, payload.document_id, write=True)
     validate_point_parent(
         db,
         document_id=document.id,
@@ -198,7 +205,7 @@ def update_point(
     point_id: str,
     payload: KnowledgePointUpdate,
 ) -> KnowledgePointDetail:
-    point = get_point_or_404(db, point_id)
+    point = get_point_or_404(db, point_id, write=True)
     data = payload.model_dump(exclude_unset=True)
 
     if "name" in data and data["name"] is None:
@@ -287,13 +294,14 @@ def bulk_review(
             "部分知识点不存在，请刷新后重试",
         )
     for point in points:
+        ensure_subject_access(db, point.subject_id, write=True)
         _apply_review_status(point, payload.status)
     db.commit()
     return len(points)
 
 
 def delete_point(db: Session, point_id: str, *, cascade: bool) -> None:
-    point = get_point_or_404(db, point_id)
+    point = get_point_or_404(db, point_id, write=True)
     descendants = descendant_ids(db, point)
     if descendants and not cascade:
         raise DomainError(
@@ -320,6 +328,8 @@ def merge_points(
             "knowledge_point_not_found",
             "部分待合并知识点不存在，请刷新后重试",
         )
+    for point in points:
+        ensure_subject_access(db, point.subject_id, write=True)
     document_ids = {point.document_id for point in points}
     if len(document_ids) != 1:
         raise DomainError(

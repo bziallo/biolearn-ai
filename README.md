@@ -382,6 +382,25 @@ V1.0 采用**单端口本地 Web 部署**：后端 FastAPI 同时提供 API 和�
    - 打开 `http://127.0.0.1:8000/`
 3. 需要 AI 功能时，进入“AI 设置”填写 API Base、Key、模型（密钥只存后端），或直接编辑 `.env`。
 
+### 阶段 6B：Owner 与邀请账号（真实库迁移需单独批准）
+
+阶段 6B 的代码已经包含 Owner、邀请、会话和学科授权，但**不会自动迁移真实库**。
+从 `0009` 升级到 `0010` 前，`prepare_env.py` 会停止并提示；批准后执行：
+
+```powershell
+cd backend
+.venv/Scripts/python.exe -m alembic upgrade head
+.venv/Scripts/python.exe ../scripts/create_owner.py --username owner
+.venv/Scripts/python.exe ../scripts/backfill_owner.py --dry-run
+# 确认计数后
+.venv/Scripts/python.exe ../scripts/backfill_owner.py --apply
+```
+
+创建 Owner 后，旧共享 `ACCESS_TOKEN` 不再作为业务身份；所有业务接口需要登录。
+受邀用户默认只能读取被授权学科、做练习并查看自己的记录；Owner 不能读取他人的练习记录。
+真实数据迁移、HTTPS 与公网部署见 `docs/PHASE6B_IMPLEMENTATION.md` 和
+`docs/PHASE6_ACCEPTANCE.md`。
+
 ### 启动脚本会给出的提示
 
 | 情况 | 行为 |
@@ -390,12 +409,12 @@ V1.0 采用**单端口本地 Web 部署**：后端 FastAPI 同时提供 API 和�
 | 端口 8000 被占用 | 提示可能已在运行；可用 `stop.bat` 停止后重试 |
 | 缺少前端构建产物 | 警告“只能使用 API”，并提示运行 `build_frontend.bat` |
 | AI 未配置 | 警告：导入/审核/练习可用，AI 识别与出题不可用 |
-| 数据库需要升级 | 先自动备份到 `backend/data/pre_migration_backups/<时间>`，再迁移 |
+| 数据库需要升级 | 先自动备份；但 0009→0010 账户迁移需要 `BIOLEARN_APPROVE_AUTH_MIGRATION=1` 才会执行 |
 | 数据库完整性异常 | 打印警告，不自动删除数据 |
 
 ### 生产运行注意事项
 
-- 服务只监听 `127.0.0.1`，默认仅本机可访问；不要直接暴露到公网（无用户认证）。
+- 服务默认只监听 `127.0.0.1`；不要直接暴露到公网。阶段 6B 后需登录，但 HTTPS/隧道验收尚未完成。
 - 关闭启动窗口或按 `Ctrl+C` 即安全停止；也可以运行 `stop.bat`。
 - 日志：控制台输出；后端错误也会写入 `backend/data/server.err.log`（开发脚本时）。
 

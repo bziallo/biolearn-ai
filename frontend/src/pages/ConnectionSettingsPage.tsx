@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 
 import { Notice } from '../components/Notice'
 import {
@@ -8,7 +9,7 @@ import {
   setRuntimeBaseUrl,
   type ClientEnvironment,
 } from '../lib/api/connection'
-import { getAuthStatus, refreshConnection } from '../lib/api'
+import { getAuthStatus, logout, refreshConnection } from '../lib/api'
 import { useToast } from '../lib/useToast'
 
 function normalize(value: string): string {
@@ -36,6 +37,7 @@ const ENVIRONMENT_HINTS: Record<ClientEnvironment, string> = {
 
 export function ConnectionSettingsPage() {
   const { notify } = useToast()
+  const navigate = useNavigate()
   const initial = describeConnection()
   const [environment] = useState<ClientEnvironment>(initial.environment)
   const [baseUrl, setBaseUrl] = useState(
@@ -54,7 +56,7 @@ export function ConnectionSettingsPage() {
       setServerAuth(auth)
       if (auth.required && !auth.authenticated) {
         setStatus('auth')
-        setMessage('服务器已启用访问口令，当前口令无效或未填写。')
+        setMessage('服务器已启用账户登录，请先在登录页登录。')
         return
       }
       setStatus('ok')
@@ -131,7 +133,7 @@ export function ConnectionSettingsPage() {
         </div>
 
         <div className="field">
-          <label htmlFor="connection-token">访问口令（服务器启用时需要）</label>
+          <label htmlFor="connection-token">登录 token（通常由登录页保存）</label>
           <input
             id="connection-token"
             type="password"
@@ -143,7 +145,7 @@ export function ConnectionSettingsPage() {
             spellCheck={false}
           />
           <p className="form-hint">
-            口令只保存在本设备本地，不会回显在页面上；电脑端在 .env 中设置 ACCESS_TOKEN。
+            登录 token 只保存在本设备会话中；旧版共享口令仅用于兼容，不再作为用户身份。
           </p>
         </div>
 
@@ -151,6 +153,23 @@ export function ConnectionSettingsPage() {
           <button type="button" className="button button-primary" onClick={save}>
             保存并测试
           </button>
+          {token && (
+            <button
+              type="button"
+              className="button button-ghost"
+              onClick={() => {
+                void logout()
+                  .finally(() => {
+                    setToken('')
+                    setServerAuth(null)
+                    notify('success', '已退出登录')
+                    navigate('/login')
+                  })
+              }}
+            >
+              退出登录
+            </button>
+          )}
           <button
             type="button"
             className="button button-ghost"
@@ -166,12 +185,15 @@ export function ConnectionSettingsPage() {
         {status === 'auth' && <Notice kind="error">{message}</Notice>}
         {serverAuth?.required && (
           <p className="form-hint">
-            服务器访问控制：已启用（{serverAuth.authenticated ? '当前口令有效' : '当前口令无效'}）
+            服务器访问控制：已启用（{serverAuth.authenticated ? '当前已登录' : '当前未登录'}）
           </p>
         )}
         {serverAuth && !serverAuth.required && (
           <p className="form-hint">服务器访问控制：未启用（仅建议在本机或可信局域网使用）</p>
         )}
+        <p className="form-hint">
+          <Link to="/login">登录账号</Link> · <Link to="/admin">成员与共享</Link>
+        </p>
       </section>
     </div>
   )

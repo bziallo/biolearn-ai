@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.enums import ReviewStatus
+from app.core.authz import ensure_subject_access
 from app.core.errors import DomainError
 from app.models import (
     Chapter,
@@ -105,10 +106,13 @@ def point_detail(db: Session, point: KnowledgePoint) -> KnowledgePointDetail:
     )
 
 
-def get_point_or_404(db: Session, point_id: str) -> KnowledgePoint:
+def get_point_or_404(
+    db: Session, point_id: str, *, write: bool = False
+) -> KnowledgePoint:
     point = db.get(KnowledgePoint, point_id)
     if point is None:
         raise DomainError(404, "knowledge_point_not_found", "知识点不存在")
+    ensure_subject_access(db, point.subject_id, write=write)
     return point
 
 

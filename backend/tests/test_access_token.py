@@ -8,19 +8,29 @@ from fastapi.testclient import TestClient
 from app import main as app_main
 from app.core.config import get_settings
 from app.core.security import _extract_token
+from app.db.session import get_db
 
 TOKEN_ENV = "ACCESS_TOKEN"
 
 
 @pytest.fixture
-def secured_client(monkeypatch: pytest.MonkeyPatch, tmp_path):
+def secured_client(monkeypatch: pytest.MonkeyPatch, session_factory):
     monkeypatch.setattr(app_main, "recover_interrupted_tasks", lambda: None)
     monkeypatch.setenv(TOKEN_ENV, "lan-secret-token")
     get_settings.cache_clear()
-    client = TestClient(app_main.create_app())
+
+    def override_get_db():
+        with session_factory() as db:
+            yield db
+
+    app = app_main.create_app()
+    app.dependency_overrides[get_db] = override_get_db
+    app.state.session_factory = session_factory
+    client = TestClient(app)
     try:
         yield client
     finally:
+        app.dependency_overrides.clear()
         get_settings.cache_clear()
         monkeypatch.delenv(TOKEN_ENV, raising=False)
         get_settings.cache_clear()

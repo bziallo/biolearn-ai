@@ -7,6 +7,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.enums import PracticeStatus, QuestionStatus, QuestionType
+from app.core.authz import (
+    current_principal,
+    ensure_practice_session_access,
+    ensure_subject_access,
+)
 from app.core.errors import DomainError
 from app.db.base import utc_now
 from app.models import (
@@ -31,10 +36,7 @@ from app.services import questions
 
 
 def _subject(db: Session, subject_id: str) -> Subject:
-    subject = db.get(Subject, subject_id)
-    if subject is None:
-        raise DomainError(404, "subject_not_found", "学科不存在")
-    return subject
+    return ensure_subject_access(db, subject_id)
 
 
 def _chapter(db: Session, chapter_id: str | None, subject_id: str) -> Chapter | None:
@@ -102,10 +104,12 @@ def get_session_or_404(db: Session, session_id: str) -> PracticeSession:
     session = db.get(PracticeSession, session_id)
     if session is None:
         raise DomainError(404, "practice_session_not_found", "练习记录不存在")
+    ensure_practice_session_access(db, session)
     return session
 
 
 def start_session(db: Session, payload: PracticeStartRequest) -> PracticeSessionRead:
+    principal = current_principal()
     subject = _subject(db, payload.subject_id)
     _chapter(db, payload.chapter_id, payload.subject_id)
     conditions = [
@@ -141,6 +145,9 @@ def start_session(db: Session, payload: PracticeStartRequest) -> PracticeSession
             .join(PracticeSession, PracticeAnswer.session_id == PracticeSession.id)
             .where(
                 PracticeSession.subject_id == subject.id,
+                PracticeSession.user_id == principal.user_id
+                if not principal.legacy
+                else True,
                 PracticeAnswer.is_correct.is_(False),
                 PracticeAnswer.question_id.is_not(None),
             )
@@ -166,6 +173,7 @@ def start_session(db: Session, payload: PracticeStartRequest) -> PracticeSession
         .limit(min(max(payload.count, 1), 50))
     ).all()
     session = PracticeSession(
+        user_id=principal.user_id if not principal.legacy else None,
         subject_id=subject.id,
         chapter_id=payload.chapter_id,
         status=PracticeStatus.IN_PROGRESS.value,
@@ -321,6 +329,7 @@ def manual_grade(
     answer = db.get(PracticeAnswer, answer_id)
     if answer is None:
         raise DomainError(404, "practice_answer_not_found", "答题记录不存在")
+    session = get_session_or_404(db, answer.session_id)
     if answer.graded_by != "pending":
         raise DomainError(409, "practice_answer_already_graded", "该答案已经评分")
     question = db.get(Question, answer.question_id) if answer.question_id else None
@@ -331,7 +340,6 @@ def manual_grade(
     answer.feedback = payload.feedback or "人工评分"
     answer.graded_by = "manual"
     db.flush()
-    session = get_session_or_404(db, answer.session_id)
     pending = db.scalar(
         select(func.count(PracticeAnswer.id)).where(
             PracticeAnswer.session_id == session.id,
@@ -359,6 +367,7 @@ def wrong_questions(
     chapter_id: str | None = None,
     limit: int = 100,
 ) -> list[WrongQuestionRead]:
+    principal = current_principal()
     _subject(db, subject_id)
     _chapter(db, chapter_id, subject_id)
     answers = db.scalars(
@@ -366,6 +375,9 @@ def wrong_questions(
         .join(PracticeSession, PracticeAnswer.session_id == PracticeSession.id)
         .where(
             PracticeSession.subject_id == subject_id,
+            PracticeSession.user_id == principal.user_id
+            if not principal.legacy
+            else True,
             PracticeAnswer.is_correct.is_(False),
             PracticeAnswer.question_id.is_not(None),
         )
@@ -405,6 +417,9 @@ def list_sessions(
     statement = select(PracticeSession).order_by(
         PracticeSession.started_at.desc()
     )
+    principal = current_principal()
+    if not principal.legacy:
+        statement = statement.where(PracticeSession.user_id == principal.user_id)
     if subject_id:
         statement = statement.where(PracticeSession.subject_id == subject_id)
     sessions = db.scalars(statement.limit(max(1, min(limit, 100)))).all()

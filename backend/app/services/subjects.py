@@ -1,6 +1,7 @@
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.authz import accessible_subject_ids, current_principal, ensure_subject_access
 from app.core.errors import DomainError
 from app.models import Chapter, Subject
 from app.schemas.subject import SubjectCreate, SubjectRead, SubjectUpdate
@@ -31,11 +32,8 @@ def _to_read(subject: Subject, chapter_count: int) -> SubjectRead:
     )
 
 
-def _get_or_404(db: Session, subject_id: str) -> Subject:
-    subject = db.get(Subject, subject_id)
-    if subject is None:
-        raise DomainError(404, "subject_not_found", "学科不存在")
-    return subject
+def _get_or_404(db: Session, subject_id: str, *, write: bool = False) -> Subject:
+    return ensure_subject_access(db, subject_id, write=write)
 
 
 def list_subjects(db: Session) -> list[SubjectRead]:
@@ -45,8 +43,12 @@ def list_subjects(db: Session) -> list[SubjectRead]:
         .correlate(Subject)
         .scalar_subquery()
     )
+    statement = select(Subject, chapter_count.label("chapter_count"))
+    allowed = accessible_subject_ids(db)
+    if allowed is not None:
+        statement = statement.where(Subject.id.in_(allowed)) if allowed else statement.where(False)
     rows = db.execute(
-        select(Subject, chapter_count.label("chapter_count")).order_by(
+        statement.order_by(
             Subject.sort_order,
             Subject.created_at,
             Subject.name,
@@ -66,7 +68,9 @@ def create_subject(db: Session, payload: SubjectCreate) -> SubjectRead:
         current_max = db.scalar(select(func.max(Subject.sort_order)))
         sort_order = 0 if current_max is None else current_max + 10
 
+    principal = current_principal()
     subject = Subject(
+        owner_id=principal.user_id if not principal.legacy else None,
         name=payload.name,
         description=payload.description,
         color=payload.color,
@@ -84,7 +88,7 @@ def update_subject(
     subject_id: str,
     payload: SubjectUpdate,
 ) -> SubjectRead:
-    subject = _get_or_404(db, subject_id)
+    subject = _get_or_404(db, subject_id, write=True)
     data = payload.model_dump(exclude_unset=True)
 
     if "name" in data and data["name"] is None:
@@ -108,7 +112,7 @@ def delete_subject(
     *,
     cascade: bool,
 ) -> None:
-    subject = _get_or_404(db, subject_id)
+    subject = _get_or_404(db, subject_id, write=True)
     chapter_count = _chapter_count(db, subject.id)
 
     if chapter_count > 0 and not cascade:

@@ -14,6 +14,7 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.errors import DomainError
 from app.core.security import AccessTokenMiddleware
+from app.db.session import SessionLocal
 from app.services.recovery import recover_interrupted_tasks
 
 
@@ -91,6 +92,10 @@ def create_app() -> FastAPI:
         debug=settings.debug,
         lifespan=lifespan,
     )
+    application.state.session_factory = SessionLocal
+    application.add_middleware(AccessTokenMiddleware)
+    # Add CORS last so authentication/authorization error responses also carry
+    # CORS headers for the browser and Android WebView clients.
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -99,7 +104,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    application.add_middleware(AccessTokenMiddleware)
     application.add_exception_handler(DomainError, domain_error_handler)
     application.add_exception_handler(
         RequestValidationError,

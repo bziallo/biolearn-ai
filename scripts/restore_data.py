@@ -9,7 +9,8 @@ Safety rules:
   instead of deleting it.
 - Requires ``--force`` when the target data directory already has content.
 - Runs ``alembic upgrade head`` afterwards so an older backup is migrated
-  forward; migrations never drop existing rows.
+  forward, except the 0009 -> 0010 account migration, which requires
+  ``BIOLEARN_APPROVE_AUTH_MIGRATION=1``.
 """
 
 from __future__ import annotations
@@ -112,6 +113,26 @@ def main() -> int:
         # Ensure alembic upgrades the restored temp DB, not the live one.
         os.environ["DATABASE_URL"] = f"sqlite:///{target_db.as_posix()}"
     sys.path.insert(0, str(BACKEND))
+
+    try:
+        with sqlite3.connect(target_db) as connection:
+            has_users_table = bool(
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'"
+                ).fetchone()
+            )
+        if (
+            not has_users_table
+            and os.environ.get("BIOLEARN_APPROVE_AUTH_MIGRATION") != "1"
+        ):
+            print("[STOP] 备份恢复到阶段 6B 之前的数据库结构。")
+            print("       账户/权限迁移必须单独批准，未自动执行 alembic upgrade。")
+            print("       批准后运行：cd backend; .venv/Scripts/python.exe -m alembic upgrade head")
+            print("       然后运行 scripts/create_owner.py 与 scripts/backfill_owner.py --dry-run。")
+            return 0
+    except sqlite3.Error as exc:
+        print(f"[WARN] 无法检查恢复库结构：{exc}")
+
     try:
         from alembic import command
         from alembic.config import Config

@@ -3,6 +3,7 @@ from collections import defaultdict
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.authz import ensure_subject_access
 from app.core.errors import DomainError
 from app.models import Chapter, Subject
 from app.schemas.chapter import (
@@ -17,17 +18,19 @@ from app.schemas.chapter import (
 from app.schemas.subject import SubjectSummary
 
 
-def _get_subject_or_404(db: Session, subject_id: str) -> Subject:
-    subject = db.get(Subject, subject_id)
-    if subject is None:
-        raise DomainError(404, "subject_not_found", "学科不存在")
-    return subject
+def _get_subject_or_404(
+    db: Session, subject_id: str, *, write: bool = False
+) -> Subject:
+    return ensure_subject_access(db, subject_id, write=write)
 
 
-def _get_chapter_or_404(db: Session, chapter_id: str) -> Chapter:
+def _get_chapter_or_404(
+    db: Session, chapter_id: str, *, write: bool = False
+) -> Chapter:
     chapter = db.get(Chapter, chapter_id)
     if chapter is None:
         raise DomainError(404, "chapter_not_found", "章节不存在")
+    ensure_subject_access(db, chapter.subject_id, write=write)
     return chapter
 
 
@@ -273,7 +276,7 @@ def create_chapter(
     subject_id: str,
     payload: ChapterCreate,
 ) -> ChapterRead:
-    _get_subject_or_404(db, subject_id)
+    _get_subject_or_404(db, subject_id, write=True)
     _validate_parent(db, subject_id, payload.parent_id)
 
     sort_order = payload.sort_order
@@ -298,7 +301,7 @@ def update_chapter(
     chapter_id: str,
     payload: ChapterUpdate,
 ) -> ChapterRead:
-    chapter = _get_chapter_or_404(db, chapter_id)
+    chapter = _get_chapter_or_404(db, chapter_id, write=True)
     data = payload.model_dump(exclude_unset=True)
 
     if "name" in data and data["name"] is None:
@@ -342,7 +345,7 @@ def delete_chapter(
     *,
     cascade: bool,
 ) -> None:
-    chapter = _get_chapter_or_404(db, chapter_id)
+    chapter = _get_chapter_or_404(db, chapter_id, write=True)
     descendants = _descendant_ids(db, chapter.subject_id, chapter.id)
 
     if descendants and not cascade:
@@ -362,7 +365,7 @@ def move_chapter(
     chapter_id: str,
     direction: str,
 ) -> ChapterRead:
-    chapter = _get_chapter_or_404(db, chapter_id)
+    chapter = _get_chapter_or_404(db, chapter_id, write=True)
     siblings = db.scalars(
         select(Chapter)
         .where(*_sibling_conditions(chapter.subject_id, chapter.parent_id))

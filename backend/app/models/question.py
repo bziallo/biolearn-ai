@@ -66,6 +66,11 @@ class QuestionGenerationJob(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    created_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     subject_id: Mapped[str] = mapped_column(
         ForeignKey("subjects.id", ondelete="CASCADE"),
         nullable=False,
@@ -269,6 +274,11 @@ class PracticeSession(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     subject_id: Mapped[str] = mapped_column(
         ForeignKey("subjects.id", ondelete="CASCADE"),
         nullable=False,

@@ -2,12 +2,15 @@ import { createBrowserRouter } from 'react-router-dom'
 
 import { AppLayout } from './layouts/AppLayout'
 import { AboutPage } from './pages/AboutPage'
+import { AdminPage } from './pages/AdminPage'
 import { AISettingsPage } from './pages/AISettingsPage'
 import { ConnectionSettingsPage } from './pages/ConnectionSettingsPage'
 import { DocumentsPage } from './pages/DocumentsPage'
 import { HomePage } from './pages/HomePage'
 import { ImportPage } from './pages/ImportPage'
+import { JoinPage } from './pages/JoinPage'
 import { KnowledgeReviewPage } from './pages/KnowledgeReviewPage'
+import { LoginPage } from './pages/LoginPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { PracticePage } from './pages/PracticePage'
 import { QuestionsPage } from './pages/QuestionsPage'
@@ -35,6 +38,9 @@ export const router = createBrowserRouter([
       { path: 'practice', element: <PracticePage /> },
       { path: 'settings/ai', element: <AISettingsPage /> },
       { path: 'settings/connection', element: <ConnectionSettingsPage /> },
+      { path: 'login', element: <LoginPage /> },
+      { path: 'join', element: <JoinPage /> },
+      { path: 'admin', element: <AdminPage /> },
       { path: 'about', element: <AboutPage /> },
       { path: '*', element: <NotFoundPage /> },
     ],

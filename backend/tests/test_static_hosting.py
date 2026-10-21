@@ -4,7 +4,19 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from sqlalchemy.orm import sessionmaker
+
 from app import main as app_main
+from app.db.base import Base
+from app.db.session import build_engine
+
+
+def _attach_test_db(client: TestClient, tmp_path: Path) -> None:
+    engine = build_engine(f"sqlite:///{tmp_path / 'static.db'}")
+    Base.metadata.create_all(engine)
+    client.app.state.session_factory = sessionmaker(
+        bind=engine, autoflush=False, expire_on_commit=False
+    )
 
 
 def _client_for_dist(tmp_path: Path, monkeypatch) -> TestClient:
@@ -21,7 +33,9 @@ def _client_for_dist(tmp_path: Path, monkeypatch) -> TestClient:
     )
     monkeypatch.setattr(app_main, "get_settings", lambda: settings)
     monkeypatch.setattr(app_main, "recover_interrupted_tasks", lambda: None)
-    return TestClient(app_main.create_app())
+    client = TestClient(app_main.create_app())
+    _attach_test_db(client, tmp_path)
+    return client
 
 
 def test_spa_is_served_with_api_and_static_assets(tmp_path: Path, monkeypatch) -> None:
@@ -59,6 +73,7 @@ def test_spa_mount_is_skipped_without_build(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setattr(app_main, "get_settings", lambda: settings)
     monkeypatch.setattr(app_main, "recover_interrupted_tasks", lambda: None)
     client = TestClient(app_main.create_app())
+    _attach_test_db(client, tmp_path)
 
     assert client.get("/api/v1/health").status_code == 200
     assert client.get("/").status_code == 404

@@ -76,6 +76,11 @@ class ImportJob(Base):
         primary_key=True,
         default=new_id,
     )
+    created_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     document_id: Mapped[str] = mapped_column(
         ForeignKey("documents.id", ondelete="CASCADE"),
         nullable=False,

@@ -69,7 +69,7 @@ export async function apiRequest<T>(
 
     if (response.status === 401) {
       throw new ApiError(
-        '需要访问口令：请在“连接设置”中填写与电脑端一致的共享口令',
+        '需要登录：请先在“登录”页面使用账号密码登录',
         401,
       )
     }
