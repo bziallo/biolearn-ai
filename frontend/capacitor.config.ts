@@ -14,7 +14,11 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   android: {
     // Localhost is the packaged asset origin, never a backend address.
-    allowMixedContent: false,
+    // The bundle is served over https://localhost, so an HTTP LAN backend is
+    // mixed content. It is required for on-premise testing (no TLS on a home
+    // LAN); a production deployment must use HTTPS, where this flag has no
+    // effect because both origins are secure.
+    allowMixedContent: true,
     backgroundColor: '#071a1a',
   },
   server: {

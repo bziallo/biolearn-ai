@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only manifest overlay.
+
+  Android 9+ blocks cleartext HTTP by default. Local LAN testing uses
+  http://<laptop-ip>:8000, so debug builds allow cleartext. Release builds do
+  not inherit this flag: a deployed backend must be reached over HTTPS.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:usesCleartextTraffic="true" />
+</manifest>
