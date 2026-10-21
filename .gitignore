@@ -1,0 +1,64 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.pem
+*.key
+*.p8
+secrets/
+.credentials/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Local database and uploads
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+backend/data/*
+!backend/data/.gitkeep
+backend/data/ai_config.json
+backend/uploads/
+uploads/
+backups/
+# Local launcher logs created by start-dev.bat / manual runs
+frontend/vite.out.log
+frontend/vite.err.log
+_start_silent.bat
+
+# Node.js and frontend build output
+node_modules/
+dist/
+frontend/coverage/
+.vite/
+*.tsbuildinfo
+
+# Logs and local tooling
+*.log
+logs/
+*.tmp
+*.bak
+*.swp
+
+# Scratch space (reference clones, experiments)
+work/
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
