@@ -32,6 +32,7 @@ class AIClientError(Exception):
         status_code: int | None = None,
         kind: str = "unknown",
         error_code: str | None = None,
+        json_mode_rejected: bool = False,
     ) -> None:
         super().__init__(message)
         self.message = message
@@ -39,6 +40,9 @@ class AIClientError(Exception):
         self.status_code = status_code
         self.kind = kind
         self.error_code = error_code
+        # True only when the provider body explicitly names response_format /
+        # json_object as unsupported. Never inferred from status alone.
+        self.json_mode_rejected = json_mode_rejected
 
 
 class AIConfigurationError(AIClientError):
@@ -110,8 +114,11 @@ class OpenAICompatibleClient:
         self.model = self.settings.ai_model
         self.api_key = self.settings.ai_api_key.get_secret_value() if self.settings.ai_api_key else ""
         # Flipped off for the rest of this client's life if the provider
-        # rejects response_format; avoids paying for the same 400 every call.
+        # rejects response_format; avoids paying for the same error every call.
         self._json_mode_enabled = bool(self.settings.ai_json_mode)
+        # Populated by chat_json; used by metrics/evaluation and job timings.
+        self.last_usage: dict[str, int] = {}
+        self.last_json_mode_fallback: dict[str, Any] | None = None
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -185,6 +192,7 @@ class OpenAICompatibleClient:
                 status_code=status,
                 kind=_error_kind(status),
                 error_code=_provider_error_code(response),
+                json_mode_rejected=_json_mode_unsupported(response),
             )
             if not retryable or attempt + 1 >= attempts:
                 raise last_error
@@ -225,6 +233,8 @@ class OpenAICompatibleClient:
         *,
         cancel_check: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
+        self.last_usage = {}
+        self.last_json_mode_fallback = None
         body: dict[str, Any] = {
             "model": self.model,
             "temperature": self.settings.ai_temperature,
@@ -244,13 +254,18 @@ class OpenAICompatibleClient:
                 cancel_check=cancel_check,
             )
         except AIClientError as exc:
-            # Some OpenAI-compatible gateways reject response_format with 400.
-            # Retry once without it, but only for that specific status.
-            if used_json_mode and exc.status_code == 400:
+            # Only fall back when the provider explicitly blames
+            # response_format (400 or 422). Other parameter errors must surface.
+            if used_json_mode and exc.json_mode_rejected:
                 logger.info(
-                    "AI provider rejected response_format; retrying without JSON mode"
+                    "AI provider rejected response_format (HTTP %s); retrying without JSON mode",
+                    exc.status_code,
                 )
                 self._json_mode_enabled = False
+                self.last_json_mode_fallback = {
+                    "status": exc.status_code,
+                    "reason": "response_format_not_supported",
+                }
                 body.pop("response_format", None)
                 response = self._request(
                     "POST",
@@ -270,6 +285,21 @@ class OpenAICompatibleClient:
                 "AI 返回结构不符合 OpenAI 兼容格式（缺少 choices/message/content）",
                 kind="bad_shape",
             ) from exc
+
+        usage = payload.get("usage")
+        if isinstance(usage, dict):
+            details = usage.get("completion_tokens_details")
+            reasoning = (
+                details.get("reasoning_tokens")
+                if isinstance(details, dict)
+                else None
+            )
+            self.last_usage = {
+                "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                "completion_tokens": int(usage.get("completion_tokens") or 0),
+                "total_tokens": int(usage.get("total_tokens") or 0),
+                "reasoning_tokens": int(reasoning or 0),
+            }
 
         if isinstance(content, list):
             content = "".join(
@@ -351,6 +381,31 @@ def re_fenced_json(text: str) -> str:
         if text.rstrip().endswith("```"):
             text = text.rstrip()[:-3]
     return text.strip()
+
+
+def _json_mode_unsupported(response: httpx.Response) -> bool:
+    """Return True only when the body explicitly blames response_format.
+
+    Kept deliberately narrow: a 400/422 caused by another parameter must not
+    silently disable JSON mode. The body is inspected in memory and never
+    logged or stored.
+    """
+
+    if response.status_code not in {400, 422}:
+        return False
+    try:
+        body = response.text[:4000].lower()
+    except Exception:  # pragma: no cover - defensive
+        return False
+    markers = (
+        "response_format",
+        "response format",
+        "json_object",
+        "json mode",
+        "json mode is not supported",
+        "unsupported parameter",
+    )
+    return any(marker in body for marker in markers)
 
 
 def _provider_error_code(response: httpx.Response) -> str | None:

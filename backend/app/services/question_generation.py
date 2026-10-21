@@ -670,6 +670,28 @@ def run_generation(
                     cancel_check=lambda: job_control.is_cancel_requested(job_id),
                 )
                 calls += 1
+                timings["model_calls"] = calls
+                usage = getattr(active_client, "last_usage", None)
+                if isinstance(usage, dict) and usage:
+                    tokens = timings.setdefault(
+                        "tokens",
+                        {
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                            "total_tokens": 0,
+                            "reasoning_tokens": 0,
+                        },
+                    )
+                    for key in (
+                        "prompt_tokens",
+                        "completion_tokens",
+                        "total_tokens",
+                        "reasoning_tokens",
+                    ):
+                        tokens[key] = int(tokens.get(key, 0)) + int(usage.get(key, 0) or 0)
+                fallback = getattr(active_client, "last_json_mode_fallback", None)
+                if isinstance(fallback, dict) and fallback:
+                    timings["json_mode_fallback"] = dict(fallback)
                 timings.setdefault("model_seconds", 0.0)
                 timings["model_seconds"] = round(
                     float(timings["model_seconds"])
