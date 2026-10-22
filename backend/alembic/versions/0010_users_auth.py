@@ -90,43 +90,33 @@ def upgrade() -> None:
     op.create_index("ix_subject_grants_grantee", "subject_grants", ["grantee_user_id"])
     op.create_index("ix_subject_grants_subject", "subject_grants", ["subject_id"])
 
-    with op.batch_alter_table("subjects") as batch:
-        batch.add_column(sa.Column("owner_id", sa.String(length=36), nullable=True))
-        batch.create_foreign_key(
-            "fk_subjects_owner_id_users",
-            "users",
-            ["owner_id"],
-            ["id"],
-            ondelete="SET NULL",
-        )
-        batch.create_index("ix_subjects_owner_id", ["owner_id"])
+    # SQLite supports ADD COLUMN without rebuilding the table. Do NOT use
+    # batch_alter_table here: rebuilding `subjects` with foreign keys enabled
+    # can cascade-delete chapters/documents and their children. The ORM still
+    # declares these as ForeignKey columns; SQLite simply does not add the
+    # constraint retroactively.
+    op.add_column(
+        "subjects", sa.Column("owner_id", sa.String(length=36), nullable=True)
+    )
+    op.create_index("ix_subjects_owner_id", "subjects", ["owner_id"])
 
-    with op.batch_alter_table("practice_sessions") as batch:
-        batch.add_column(sa.Column("user_id", sa.String(length=36), nullable=True))
-        batch.create_foreign_key(
-            "fk_practice_sessions_user_id_users",
-            "users",
-            ["user_id"],
-            ["id"],
-            ondelete="SET NULL",
-        )
-        batch.create_index("ix_practice_sessions_user_id", ["user_id"])
+    op.add_column(
+        "practice_sessions",
+        sa.Column("user_id", sa.String(length=36), nullable=True),
+    )
+    op.create_index(
+        "ix_practice_sessions_user_id", "practice_sessions", ["user_id"]
+    )
 
     for table in (
         "import_jobs",
         "knowledge_extraction_jobs",
         "question_generation_jobs",
     ):
-        with op.batch_alter_table(table) as batch:
-            batch.add_column(sa.Column("created_by", sa.String(length=36), nullable=True))
-            batch.create_foreign_key(
-                f"fk_{table}_created_by_users",
-                "users",
-                ["created_by"],
-                ["id"],
-                ondelete="SET NULL",
-            )
-            batch.create_index(f"ix_{table}_created_by", ["created_by"])
+        op.add_column(
+            table, sa.Column("created_by", sa.String(length=36), nullable=True)
+        )
+        op.create_index(f"ix_{table}_created_by", table, ["created_by"])
 
 
 def downgrade() -> None:
@@ -135,22 +125,14 @@ def downgrade() -> None:
         "knowledge_extraction_jobs",
         "question_generation_jobs",
     ):
-        with op.batch_alter_table(table) as batch:
-            batch.drop_index(f"ix_{table}_created_by")
-            batch.drop_constraint(f"fk_{table}_created_by_users", type_="foreignkey")
-            batch.drop_column("created_by")
+        op.drop_index(f"ix_{table}_created_by", table_name=table)
+        op.drop_column(table, "created_by")
 
-    with op.batch_alter_table("practice_sessions") as batch:
-        batch.drop_index("ix_practice_sessions_user_id")
-        batch.drop_constraint(
-            "fk_practice_sessions_user_id_users", type_="foreignkey"
-        )
-        batch.drop_column("user_id")
+    op.drop_index("ix_practice_sessions_user_id", table_name="practice_sessions")
+    op.drop_column("practice_sessions", "user_id")
 
-    with op.batch_alter_table("subjects") as batch:
-        batch.drop_index("ix_subjects_owner_id")
-        batch.drop_constraint("fk_subjects_owner_id_users", type_="foreignkey")
-        batch.drop_column("owner_id")
+    op.drop_index("ix_subjects_owner_id", table_name="subjects")
+    op.drop_column("subjects", "owner_id")
 
     op.drop_index("ix_subject_grants_subject", table_name="subject_grants")
     op.drop_index("ix_subject_grants_grantee", table_name="subject_grants")

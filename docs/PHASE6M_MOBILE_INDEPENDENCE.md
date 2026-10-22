@@ -198,7 +198,13 @@ AI 相关：
 - 网络失败保留文件，恢复后重试；
 - 原有 `ImportJob` 状态轮询、失败重试、重复策略不变。
 
-### 3.5 未改
+### 3.5 Android 返回
+
+`MainActivity.java` 覆盖 `onBackPressed()`：WebView `canGoBack()` 时调用
+`webView.goBack()`，否则交给 Capacitor 默认行为。真机实测从课程知识库返回课程列表，
+不再直接退出 App。
+
+### 3.6 未改
 
 - 后端 API、数据库、迁移；
 - 知识点审核规则、AI 调用逻辑；
@@ -213,7 +219,9 @@ AI 相关：
 
 - Debug APK 可以访问 `http://<电脑IP>:8000/api/v1`；
 - 需要电脑后端 `--lan` 监听，必要时放行防火墙；
-- 本次真机未完成（设备锁屏/安装被拒），不能宣称已验证。
+- 真机主流程已用 **临时副本数据库 + `adb reverse`** 验证：安装、连接、课程点击、
+  知识库/知识点、文件选择、导入/解析、Android 返回、离线缓存与恢复均通过。
+- **同 Wi-Fi 局域网与互联网 HTTPS 仍未验证**；`adb reverse` 不能替代局域网验收。
 
 ### 场景 B：互联网 HTTPS
 
@@ -251,6 +259,9 @@ AI 相关：
 ## 六、安全与数据
 
 - 未迁移真实数据库；真实库仍为 `0009_question_bank`（10 学科/2 资料/78 知识点/7 题/3 练习）。
+- 隔离库测试发现并修复了 `0010_users_auth` 迁移的 SQLite 重建风险：原
+  `batch_alter_table("subjects")` 会级联删除章节等子表；已改为直接 `ADD COLUMN`，
+  并新增“0009 有章节 → 0010 后章节仍存在”的迁移测试。
 - 未修改 `v1.0.0-rc.1` 标签。
 - APK 不包含 AI Key、DB 口令、keystore、Service Token。
 - Debug 允许 HTTP 仅用于局域网；Release 仍禁止明文。
@@ -271,6 +282,8 @@ AI 相关：
 - `frontend/src/components/OfflineBanner.tsx`
 - `frontend/src/router.tsx`
 - `frontend/src/styles.css`
+- `frontend/android/app/src/main/java/ai/biolearn/app/MainActivity.java`
+- `backend/alembic/versions/0010_users_auth.py`（迁移数据保全修复）
 - `frontend/src/pages/SubjectKnowledgePage.test.tsx`
 - `frontend/src/pages/SubjectsPage.test.tsx`
 - `frontend/src/components/DocumentUploadCard.test.tsx`

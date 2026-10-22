@@ -118,3 +118,46 @@ def test_migrations_replay_and_seed_initial_subjects(
             assert count == 10
     finally:
         engine.dispose()
+
+
+def test_auth_migration_preserves_existing_chapter_rows(tmp_path: Path) -> None:
+    """0010 must add columns without rebuilding subjects (which cascades)."""
+
+    database_path = tmp_path / "preserve.db"
+    config = _config_for(database_path)
+    command.upgrade(config, "0009_question_bank")
+
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO subjects "
+                    "(id, name, description, sort_order, created_at, updated_at) "
+                    "VALUES ('s1', 'Legacy', '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO chapters "
+                    "(id, subject_id, parent_id, name, description, sort_order, created_at, updated_at) "
+                    "VALUES ('c1', 's1', NULL, 'Chapter', '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                )
+            )
+        with engine.connect() as connection:
+            assert connection.execute(text("SELECT COUNT(*) FROM chapters")).scalar_one() == 1
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(
+                text("SELECT COUNT(*) FROM subjects WHERE id = 's1'")
+            ).scalar_one() == 1
+            assert connection.execute(text("SELECT COUNT(*) FROM chapters")).scalar_one() == 1
+            assert connection.execute(text("SELECT subject_id FROM chapters")).scalar_one() == "s1"
+    finally:
+        engine.dispose()
