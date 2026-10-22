@@ -30,6 +30,8 @@ import {
   type UncertainPolicy,
 } from '../lib/api'
 import { flattenTree } from '../lib/chapterTree'
+import { formatBytes } from '../lib/format'
+import { isOfflineError, useOnlineStatus } from '../lib/offline/network'
 import { useToast } from '../lib/useToast'
 
 const RUNNING_STATUSES = new Set([
@@ -71,6 +73,7 @@ type SourceType = 'courseware' | 'external_json'
 
 export function ImportPage() {
   const { notify } = useToast()
+  const online = useOnlineStatus()
   const [searchParams] = useSearchParams()
   const requestedSubject = searchParams.get('subject')
 
@@ -231,11 +234,30 @@ export function ImportPage() {
   }, [jobId, jobStatus, notify])
 
   function selectFile(nextFile: File | null) {
-    setFile(nextFile)
     setError('')
-    if (nextFile) {
-      setJob(null)
+    if (!nextFile) {
+      setFile(null)
+      return
     }
+    const allowed = sourceType === 'external_json'
+      ? /\.json$/i
+      : /\.(pdf|docx|pptx|txt|md|markdown)$/i
+    if (!allowed.test(nextFile.name)) {
+      setFile(null)
+      setError(
+        sourceType === 'external_json'
+          ? '请选择 .json 文件。'
+          : '不支持该格式；当前支持 PDF、DOCX、PPTX、TXT、MD。旧版 .ppt 请先另存为 .pptx。',
+      )
+      return
+    }
+    if (nextFile.size > 25 * 1024 * 1024) {
+      setFile(null)
+      setError(`文件超过 25 MB 限制（当前 ${formatBytes(nextFile.size)}）。`)
+      return
+    }
+    setFile(nextFile)
+    setJob(null)
   }
 
   function handleDrop(event: DragEvent<HTMLDivElement>) {
@@ -254,6 +276,10 @@ export function ImportPage() {
     }
     if (!subjectId) {
       setError('请选择学科，或先在下方设置默认学科')
+      return
+    }
+    if (!online) {
+      setError('当前离线，无法上传。文件已保留；恢复网络后重新点击“开始导入”。')
       return
     }
     setBusy(true)
@@ -286,7 +312,11 @@ export function ImportPage() {
         ),
       ].slice(0, 10))
     } catch (uploadError) {
-      setError(getErrorMessage(uploadError))
+      setError(
+        isOfflineError(uploadError)
+          ? '网络中断或后端不可达，文件仍保留在本次页面中。恢复连接后重试；若提示重复，请先到资料库确认，避免重复记录。'
+          : getErrorMessage(uploadError),
+      )
     } finally {
       setBusy(false)
     }
@@ -498,6 +528,12 @@ export function ImportPage() {
         </section>
       )}
 
+      {!online && (
+        <Notice kind="info">
+          当前离线：只能查看已缓存内容。课件上传、解析和 AI 分析需要连接 BioLearn 后端。
+        </Notice>
+      )}
+
       {!subjectId && (
         <Notice kind="info">
           还没有可用的默认学科。请在下方选择本次学科，或打开“默认设置”保存一次默认位置。
@@ -692,7 +728,7 @@ export function ImportPage() {
             type="button"
             className="button button-primary"
             onClick={() => void submit()}
-            disabled={busy || jobRunning || !file || !subjectId}
+            disabled={busy || jobRunning || !file || !subjectId || !online}
           >
             {busy ? '上传中…' : '开始导入'}
           </button>

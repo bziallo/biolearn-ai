@@ -19,7 +19,11 @@ import {
   type Subject,
   type SubjectInput,
 } from '../lib/api'
+import { readOfflineCache, writeOfflineCache } from '../lib/offline/cache'
+import { isOfflineError, useOnlineStatus } from '../lib/offline/network'
 import { useToast } from '../lib/useToast'
+
+const SUBJECTS_CACHE_KEY = 'subjects'
 
 type PageStatus = 'loading' | 'ready' | 'error'
 
@@ -27,12 +31,14 @@ export function SubjectsPage() {
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [status, setStatus] = useState<PageStatus>('loading')
   const [error, setError] = useState('')
+  const [cachedAt, setCachedAt] = useState<string | null>(null)
   const [formMode, setFormMode] = useState<'create' | 'edit' | null>(null)
   const [editing, setEditing] = useState<Subject | null>(null)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState<Subject | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
   const { notify } = useToast()
+  const online = useOnlineStatus()
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setStatus('loading')
@@ -40,10 +46,21 @@ export function SubjectsPage() {
     try {
       const data = await listSubjects(signal)
       setSubjects(data)
+      setCachedAt(null)
       setStatus('ready')
+      void writeOfflineCache(SUBJECTS_CACHE_KEY, data)
     } catch (loadError) {
       if (signal?.aborted) {
         return
+      }
+      if (isOfflineError(loadError)) {
+        const cached = await readOfflineCache<Subject[]>(SUBJECTS_CACHE_KEY)
+        if (cached) {
+          setSubjects(cached.data)
+          setCachedAt(cached.savedAt)
+          setStatus('ready')
+          return
+        }
       }
       setStatus('error')
       setError(getErrorMessage(loadError))
@@ -56,10 +73,18 @@ export function SubjectsPage() {
     return () => controller.abort()
   }, [load])
 
+  useEffect(() => {
+    if (online && cachedAt) {
+      void load()
+    }
+  }, [online, cachedAt, load])
+
   async function refreshSubjects() {
     const data = await listSubjects()
     setSubjects(data)
+    setCachedAt(null)
     setStatus('ready')
+    void writeOfflineCache(SUBJECTS_CACHE_KEY, data)
   }
 
   function openCreate() {
@@ -153,6 +178,13 @@ export function SubjectsPage() {
         <span className="stat-chip stat-chip-muted">数据来自本地 SQLite</span>
       </div>
 
+      {cachedAt && (
+        <Notice kind="info">
+          当前离线，显示上次缓存的课程列表（{new Date(cachedAt).toLocaleString('zh-CN')}）。
+          课程内容仍需联网加载；已缓存的课程可以继续离线浏览。
+        </Notice>
+      )}
+
       {status === 'error' && (
         <div className="error-panel">
           <Notice kind="error">无法加载学科：{error}</Notice>
@@ -201,24 +233,34 @@ export function SubjectsPage() {
                 } as CSSProperties
               }
             >
-              <div className="subject-card-head">
-                <span className="subject-icon" aria-hidden="true">
-                  {subject.icon ?? '📚'}
-                </span>
-                <span className="subject-count">
-                  {subject.chapter_count} 章
-                </span>
-              </div>
-              <h2>
-                <Link to={`/subjects/${subject.id}`}>{subject.name}</Link>
-              </h2>
-              <p>{subject.description || '还没有简介。'}</p>
+              <Link
+                className="subject-card-main"
+                to={`/subjects/${subject.id}/knowledge`}
+                aria-label={`进入 ${subject.name} 知识库`}
+              >
+                <div className="subject-card-head">
+                  <span className="subject-icon" aria-hidden="true">
+                    {subject.icon ?? '📚'}
+                  </span>
+                  <span className="subject-count">
+                    {subject.chapter_count} 章
+                  </span>
+                </div>
+                <h2>{subject.name}</h2>
+                <p>{subject.description || '还没有简介。'}</p>
+              </Link>
               <div className="subject-actions">
                 <Link
                   className="button button-small"
+                  to={`/subjects/${subject.id}/knowledge`}
+                >
+                  进入知识库
+                </Link>
+                <Link
+                  className="button button-small button-ghost"
                   to={`/subjects/${subject.id}`}
                 >
-                  查看章节
+                  章节管理
                 </Link>
                 <button
                   type="button"

@@ -120,4 +120,46 @@ describe('DocumentUploadCard', () => {
       screen.getByRole('button', { name: '仍然上传' }),
     ).toBeInTheDocument()
   })
+
+  it('rejects unsupported formats and files over 25 MB before upload', () => {
+    vi.stubGlobal('fetch', vi.fn())
+    render(
+      <ToastProvider>
+        <DocumentUploadCard subjectId="s1" tree={[]} onUploaded={vi.fn()} />
+      </ToastProvider>,
+    )
+
+    fireEvent.change(screen.getByLabelText('选择文件'), {
+      target: { files: [new File(['x'], 'slides.ppt', { type: 'application/vnd.ms-powerpoint' })] },
+    })
+    expect(screen.getByText(/不支持该文件格式/)).toBeInTheDocument()
+
+    const large = new File(['x'], 'large.pdf', { type: 'application/pdf' })
+    Object.defineProperty(large, 'size', { value: 26 * 1024 * 1024 })
+    fireEvent.change(screen.getByLabelText('选择文件'), {
+      target: { files: [large] },
+    })
+    expect(screen.getByText(/超过 25 MB/)).toBeInTheDocument()
+  })
+
+  it('keeps the selected file and offers a retry after a network failure', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('network down')))
+    const onUploaded = vi.fn()
+    render(
+      <ToastProvider>
+        <DocumentUploadCard subjectId="s1" tree={[]} onUploaded={onUploaded} />
+      </ToastProvider>,
+    )
+
+    fireEvent.change(screen.getByLabelText('选择文件'), {
+      target: { files: [new File(['# x'], 'protein.md', { type: 'text/markdown' })] },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '上传并解析' }))
+
+    expect(await screen.findByText(/网络中断/)).toBeInTheDocument()
+    expect(screen.getByText(/已选择：protein.md/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '重试上传' })).toBeInTheDocument()
+    expect(onUploaded).not.toHaveBeenCalled()
+  })
+
 })

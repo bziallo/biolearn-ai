@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
 
+import { OfflineBanner } from '../components/OfflineBanner'
 import { ToastProvider } from '../components/ToastProvider'
 
 function navClassName({ isActive }: { isActive: boolean }) {
@@ -66,6 +67,8 @@ export function AppLayout() {
             </NavLink>
           </nav>
         </header>
+
+        <OfflineBanner />
 
         <main className="site-main">
           <Outlet />

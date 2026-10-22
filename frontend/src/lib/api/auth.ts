@@ -1,5 +1,6 @@
 import { apiRequest } from './client'
 import { setAccessToken } from './connection'
+import { clearOfflineCache } from '../offline/cache'
 
 export interface AuthUser {
   id: string
@@ -40,15 +41,17 @@ export function login(username: string, password: string): Promise<{ token: stri
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
-  }).then((result) => {
+  }).then(async (result) => {
     const data = result as { token: string; user: AuthUser }
+    await clearOfflineCache()
     setAccessToken(data.token)
     return data
   })
 }
 
 export function logout(): Promise<{ ok: boolean }> {
-  return apiRequest('/auth/logout', { method: 'POST' }).finally(() => {
+  return apiRequest('/auth/logout', { method: 'POST' }).finally(async () => {
+    await clearOfflineCache()
     setAccessToken('')
   }) as Promise<{ ok: boolean }>
 }
@@ -67,8 +70,9 @@ export function acceptInvitation(payload: {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-  }).then((result) => {
+  }).then(async (result) => {
     const data = result as { token: string; user: AuthUser }
+    await clearOfflineCache()
     setAccessToken(data.token)
     return data
   })

@@ -337,6 +337,12 @@ export function SubjectDetailPage() {
         <div className="subject-hero-actions">
           <Link
             className="button button-ghost"
+            to={`/subjects/${subject.id}/knowledge`}
+          >
+            知识库
+          </Link>
+          <Link
+            className="button button-ghost"
             to={`/subjects/${subject.id}/documents`}
           >
             资料库

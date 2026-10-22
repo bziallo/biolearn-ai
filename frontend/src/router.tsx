@@ -15,6 +15,7 @@ import { NotFoundPage } from './pages/NotFoundPage'
 import { PracticePage } from './pages/PracticePage'
 import { QuestionsPage } from './pages/QuestionsPage'
 import { SubjectDetailPage } from './pages/SubjectDetailPage'
+import { SubjectKnowledgePage } from './pages/SubjectKnowledgePage'
 import { SubjectsPage } from './pages/SubjectsPage'
 
 export const router = createBrowserRouter([
@@ -26,6 +27,10 @@ export const router = createBrowserRouter([
       { path: 'import', element: <ImportPage /> },
       { path: 'subjects', element: <SubjectsPage /> },
       { path: 'subjects/:subjectId', element: <SubjectDetailPage /> },
+      {
+        path: 'subjects/:subjectId/knowledge',
+        element: <SubjectKnowledgePage />,
+      },
       {
         path: 'subjects/:subjectId/documents',
         element: <DocumentsPage />,

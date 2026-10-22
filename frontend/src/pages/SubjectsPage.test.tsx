@@ -67,6 +67,12 @@ describe('SubjectsPage', () => {
     expect(screen.getByText('2 章')).toBeInTheDocument()
     expect(screen.getByText('5 章')).toBeInTheDocument()
     expect(screen.getByText('数据来自本地 SQLite')).toBeInTheDocument()
+    expect(
+      screen.getByRole('link', { name: '进入 生物化学 知识库' }),
+    ).toHaveAttribute('href', '/subjects/s1/knowledge')
+    expect(
+      screen.getByRole('link', { name: '进入 微生物学 知识库' }),
+    ).toHaveAttribute('href', '/subjects/s2/knowledge')
   })
 
   it('shows an empty state when the database has no subjects', async () => {
