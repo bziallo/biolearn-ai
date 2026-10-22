@@ -129,6 +129,62 @@ export interface LocalPracticeAnswer {
   syncState: LocalSyncState
 }
 
+export type LocalFileStatus =
+  | 'selected'
+  | 'copying'
+  | 'stored'
+  | 'failed'
+  | 'deleted'
+
+export type LocalParseStatus =
+  | 'queued'
+  | 'parsing'
+  | 'parsed'
+  | 'failed'
+
+export type LocalUploadStatus =
+  | 'queued'
+  | 'uploading'
+  | 'uploaded'
+  | 'failed'
+  | 'needs_verification'
+
+export interface LocalFileRecord {
+  id: string
+  documentId: string
+  relativePath: string
+  originalFilename: string
+  mimeType: string
+  sizeBytes: number
+  sha256: string
+  status: LocalFileStatus
+  error: string | null
+  createdAt: string
+}
+
+export interface LocalParseJob {
+  id: string
+  documentId: string
+  status: LocalParseStatus
+  error: string | null
+  createdAt: string
+  updatedAt: string
+  finishedAt: string | null
+}
+
+export interface LocalUploadJob {
+  id: string
+  documentId: string
+  fileId: string
+  status: LocalUploadStatus
+  attempts: number
+  lastError: string | null
+  createdAt: string
+  updatedAt: string
+  nextRetryAt: string | null
+  remoteDocumentId: string | null
+}
+
 export interface LocalDatabaseStatus {
   databaseName: string
   schemaVersion: number

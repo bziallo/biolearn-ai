@@ -1,5 +1,5 @@
 export const LOCAL_DB_NAME = 'biolearn_local'
-export const LOCAL_DB_SCHEMA_VERSION = 2
+export const LOCAL_DB_SCHEMA_VERSION = 3
 
 export interface LocalMigration {
   version: number
@@ -169,7 +169,52 @@ const v2 = [
   `ALTER TABLE local_documents ADD COLUMN local_path TEXT`,
 ]
 
+const v3 = [
+  `CREATE TABLE IF NOT EXISTS local_files (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL UNIQUE REFERENCES local_documents(id) ON DELETE CASCADE,
+    relative_path TEXT NOT NULL UNIQUE,
+    original_filename TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'stored'
+      CHECK (status IN ('selected','copying','stored','failed','deleted')),
+    error TEXT,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_local_files_sha ON local_files(sha256)`,
+  `CREATE INDEX IF NOT EXISTS idx_local_files_status ON local_files(status)`,
+  `CREATE TABLE IF NOT EXISTS local_parse_jobs (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL REFERENCES local_documents(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'queued'
+      CHECK (status IN ('queued','parsing','parsed','failed')),
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_local_parse_jobs_document ON local_parse_jobs(document_id)`,
+  `CREATE TABLE IF NOT EXISTS local_upload_jobs (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL REFERENCES local_documents(id) ON DELETE CASCADE,
+    file_id TEXT NOT NULL REFERENCES local_files(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'queued'
+      CHECK (status IN ('queued','uploading','uploaded','failed','needs_verification')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    next_retry_at TEXT,
+    remote_document_id TEXT,
+    UNIQUE(document_id, file_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_local_upload_jobs_status ON local_upload_jobs(status)`,
+]
+
 export const LOCAL_MIGRATIONS: LocalMigration[] = [
   { version: 1, statements: v1 },
   { version: 2, statements: v2 },
+  { version: 3, statements: v3 },
 ]

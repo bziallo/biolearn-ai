@@ -25,11 +25,17 @@ import type {
   LocalDocument,
   LocalExportData,
   LocalExportPayload,
+  LocalFileRecord,
   LocalKnowledgePoint,
+  LocalParseJob,
   LocalPracticeAnswer,
   LocalPracticeSession,
   LocalQuestion,
+  LocalUploadJob,
 } from './types'
+import type { StoredFile } from './fileStore'
+import type { ParsedTextDocument } from './textParser'
+import { assertTransition, UPLOAD_TRANSITIONS } from './stateMachines'
 
 export class LocalDatabaseError extends Error {
   constructor(message: string, public readonly cause?: unknown) {
@@ -329,6 +335,9 @@ export class LocalDatabase {
       'local_questions',
       'local_practice_sessions',
       'local_practice_answers',
+      'local_files',
+      'local_parse_jobs',
+      'local_upload_jobs',
     ]) {
       const rows = await this.driver.query<{ count: number }>(
         `SELECT COUNT(*) AS count FROM ${table}`,
@@ -582,6 +591,9 @@ export class LocalDatabase {
       await this.clearActiveTransaction()
       await this.driver.beginTransaction()
       for (const table of [
+        'local_upload_jobs',
+        'local_parse_jobs',
+        'local_files',
         'local_practice_answers',
         'local_practice_sessions',
         'local_question_knowledge_points',
@@ -606,6 +618,249 @@ export class LocalDatabase {
         error,
       )
     }
+  }
+
+  async createTextDocument(
+    file: StoredFile,
+    parsed: ParsedTextDocument,
+    courseId = SYNTHETIC_COURSE.id,
+    chapterId: string | null = SYNTHETIC_CHAPTERS[0]?.id ?? null,
+  ): Promise<{ documentId: string; uploadJobId: string }> {
+    const documentId = file.id
+    const fileId = `file-${file.id}`
+    const parseJobId = `parse-${file.id}`
+    const uploadJobId = `upload-${file.id}`
+    const now = new Date().toISOString()
+    try {
+      await this.clearActiveTransaction()
+      await this.driver.beginTransaction()
+      await this.driver.run(
+        `INSERT INTO local_documents
+        (id, server_id, course_id, chapter_id, name, original_filename, mime_type, extension, size_bytes, sha256, status, parse_error, chunk_count, knowledge_point_count, local_path, created_at, updated_at, sync_state, version)
+        VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'parsed', NULL, ?, 0, ?, ?, ?, 'local_only', 0)`,
+        [
+          documentId,
+          courseId,
+          chapterId,
+          parsed.title,
+          file.originalFilename,
+          file.mimeType,
+          file.originalFilename.toLowerCase().endsWith('.md') ||
+          file.originalFilename.toLowerCase().endsWith('.markdown')
+            ? '.md'
+            : '.txt',
+          file.sizeBytes,
+          file.sha256,
+          parsed.chunks.length,
+          file.relativePath,
+          now,
+          now,
+        ],
+      )
+      await this.driver.run(
+        `INSERT INTO local_files
+        (id, document_id, relative_path, original_filename, mime_type, size_bytes, sha256, status, error, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'stored', NULL, ?)`,
+        [
+          fileId,
+          documentId,
+          file.relativePath,
+          file.originalFilename,
+          file.mimeType,
+          file.sizeBytes,
+          file.sha256,
+          now,
+        ],
+      )
+      for (const chunk of parsed.chunks) {
+        await this.driver.run(
+          `INSERT INTO local_chunks
+          (id, document_id, chunk_index, heading_path, heading_level, content, page_start, page_end, slide_number, char_start, char_end, location_label, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?)`,
+          [
+            chunk.id,
+            documentId,
+            chunk.index,
+            chunk.headingPath,
+            chunk.headingLevel,
+            chunk.content,
+            chunk.charStart,
+            chunk.charEnd,
+            chunk.locationLabel,
+            now,
+          ],
+        )
+      }
+      await this.driver.run(
+        `INSERT INTO local_parse_jobs
+        (id, document_id, status, error, created_at, updated_at, finished_at)
+        VALUES (?, ?, 'parsed', NULL, ?, ?, ?)`,
+        [parseJobId, documentId, now, now, now],
+      )
+      await this.driver.run(
+        `INSERT INTO local_upload_jobs
+        (id, document_id, file_id, status, attempts, last_error, created_at, updated_at, next_retry_at, remote_document_id)
+        VALUES (?, ?, ?, 'queued', 0, NULL, ?, ?, NULL, NULL)`,
+        [uploadJobId, documentId, fileId, now, now],
+      )
+      await this.driver.commitTransaction()
+      return { documentId, uploadJobId }
+    } catch (error) {
+      await this.driver.rollbackTransaction().catch(() => undefined)
+      throw new LocalDatabaseError(
+        `保存本地文件记录失败：${error instanceof Error ? error.message : String(error)}`,
+        error,
+      )
+    }
+  }
+
+  async recordFailedTextDocument(
+    file: StoredFile,
+    parseError: string,
+    courseId = SYNTHETIC_COURSE.id,
+    chapterId: string | null = SYNTHETIC_CHAPTERS[0]?.id ?? null,
+  ): Promise<{ documentId: string; uploadJobId: string }> {
+    const documentId = file.id
+    const fileId = `file-${file.id}`
+    const parseJobId = `parse-${file.id}`
+    const uploadJobId = `upload-${file.id}`
+    const now = new Date().toISOString()
+    try {
+      await this.clearActiveTransaction()
+      await this.driver.beginTransaction()
+      await this.driver.run(
+        `INSERT INTO local_documents
+        (id, server_id, course_id, chapter_id, name, original_filename, mime_type, extension, size_bytes, sha256, status, parse_error, chunk_count, knowledge_point_count, local_path, created_at, updated_at, sync_state, version)
+        VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'failed', ?, 0, 0, ?, ?, ?, 'local_only', 0)`,
+        [
+          documentId,
+          courseId,
+          chapterId,
+          file.originalFilename.replace(/\.[^.]+$/, ''),
+          file.originalFilename,
+          file.mimeType,
+          file.originalFilename.toLowerCase().endsWith('.md') ? '.md' : '.txt',
+          file.sizeBytes,
+          file.sha256,
+          parseError.slice(0, 1000),
+          file.relativePath,
+          now,
+          now,
+        ],
+      )
+      await this.driver.run(
+        `INSERT INTO local_files
+        (id, document_id, relative_path, original_filename, mime_type, size_bytes, sha256, status, error, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'stored', ?, ?)`,
+        [
+          fileId,
+          documentId,
+          file.relativePath,
+          file.originalFilename,
+          file.mimeType,
+          file.sizeBytes,
+          file.sha256,
+          parseError.slice(0, 1000),
+          now,
+        ],
+      )
+      await this.driver.run(
+        `INSERT INTO local_parse_jobs
+        (id, document_id, status, error, created_at, updated_at, finished_at)
+        VALUES (?, ?, 'failed', ?, ?, ?, ?)`,
+        [parseJobId, documentId, parseError.slice(0, 1000), now, now, now],
+      )
+      await this.driver.run(
+        `INSERT INTO local_upload_jobs
+        (id, document_id, file_id, status, attempts, last_error, created_at, updated_at, next_retry_at, remote_document_id)
+        VALUES (?, ?, ?, 'queued', 0, NULL, ?, ?, NULL, NULL)`,
+        [uploadJobId, documentId, fileId, now, now],
+      )
+      await this.driver.commitTransaction()
+      return { documentId, uploadJobId }
+    } catch (error) {
+      await this.driver.rollbackTransaction().catch(() => undefined)
+      throw new LocalDatabaseError(
+        `保存失败文件记录失败：${error instanceof Error ? error.message : String(error)}`,
+        error,
+      )
+    }
+  }
+
+  async listFiles(): Promise<LocalFileRecord[]> {
+    const rows = await this.driver.query('SELECT * FROM local_files ORDER BY created_at DESC')
+    return rows.map((row) => ({
+      id: text(row.id),
+      documentId: text(row.document_id),
+      relativePath: text(row.relative_path),
+      originalFilename: text(row.original_filename),
+      mimeType: text(row.mime_type),
+      sizeBytes: numberValue(row.size_bytes),
+      sha256: text(row.sha256),
+      status: text(row.status) as LocalFileRecord['status'],
+      error: nullableText(row.error),
+      createdAt: text(row.created_at),
+    }))
+  }
+
+  async listParseJobs(): Promise<LocalParseJob[]> {
+    const rows = await this.driver.query(
+      'SELECT * FROM local_parse_jobs ORDER BY created_at DESC',
+    )
+    return rows.map((row) => ({
+      id: text(row.id),
+      documentId: text(row.document_id),
+      status: text(row.status) as LocalParseJob['status'],
+      error: nullableText(row.error),
+      createdAt: text(row.created_at),
+      updatedAt: text(row.updated_at),
+      finishedAt: nullableText(row.finished_at),
+    }))
+  }
+
+  async listUploadJobs(): Promise<LocalUploadJob[]> {
+    const rows = await this.driver.query(
+      'SELECT * FROM local_upload_jobs ORDER BY created_at DESC',
+    )
+    return rows.map((row) => ({
+      id: text(row.id),
+      documentId: text(row.document_id),
+      fileId: text(row.file_id),
+      status: text(row.status) as LocalUploadJob['status'],
+      attempts: numberValue(row.attempts),
+      lastError: nullableText(row.last_error),
+      createdAt: text(row.created_at),
+      updatedAt: text(row.updated_at),
+      nextRetryAt: nullableText(row.next_retry_at),
+      remoteDocumentId: nullableText(row.remote_document_id),
+    }))
+  }
+
+  /**
+   * 7C does not execute a network upload: the current FastAPI endpoint has no
+   * idempotency key. Re-queue is only a local state transition for manual
+   * inspection; it must not be reported as a successful upload.
+   */
+  async requeueUploadJob(jobId: string): Promise<LocalUploadJob> {
+    const rows = await this.driver.query('SELECT * FROM local_upload_jobs WHERE id = ?', [jobId])
+    if (!rows.length) {
+      throw new LocalDatabaseError('上传任务不存在')
+    }
+    const status = text(rows[0].status) as LocalUploadJob['status']
+    try {
+      assertTransition(UPLOAD_TRANSITIONS, status, 'queued', '上传任务')
+    } catch (transitionError) {
+      throw new LocalDatabaseError(
+        transitionError instanceof Error ? transitionError.message : '非法状态转换',
+      )
+    }
+    await this.driver.run(
+      `UPDATE local_upload_jobs
+       SET status = 'queued', last_error = ?, updated_at = ?, next_retry_at = NULL
+       WHERE id = ?`,
+      ['等待服务端幂等接口；7C 未执行自动上传', new Date().toISOString(), jobId],
+    )
+    return (await this.listUploadJobs()).find((job) => job.id === jobId)!
   }
 
   private async insertData(data: LocalExportData): Promise<void> {

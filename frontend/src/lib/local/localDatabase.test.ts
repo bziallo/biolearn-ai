@@ -103,7 +103,7 @@ describe('LocalDatabase', () => {
     await database.seedSynthetic()
 
     const status = await database.status()
-    expect(status.schemaVersion).toBe(2)
+    expect(status.schemaVersion).toBe(3)
     expect(status.foreignKeys).toBe(true)
     expect(status.syntheticOnly).toBe(true)
     expect(status.counts.local_courses).toBe(1)
@@ -150,11 +150,19 @@ describe('LocalDatabase', () => {
     const versions = await driver.query<{ version: number }>(
       'SELECT version FROM schema_migrations ORDER BY version',
     )
-    expect(versions.map((row) => row.version)).toEqual([1, 2])
+    expect(versions.map((row) => row.version)).toEqual([1, 2, 3])
     const columns = await driver.query<{ name: string }>(
       'PRAGMA table_info(local_documents)',
     )
     expect(columns.some((column) => column.name === 'local_path')).toBe(true)
+    const tables = await driver.query<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('local_files','local_parse_jobs','local_upload_jobs')",
+    )
+    expect(tables.map((row) => row.name).sort()).toEqual([
+      'local_files',
+      'local_parse_jobs',
+      'local_upload_jobs',
+    ])
     expect((await database.status()).counts.local_courses).toBe(1)
   })
 
@@ -198,6 +206,123 @@ describe('LocalDatabase', () => {
     const data = await reopened.readAll()
     expect(data.courses).toHaveLength(1)
     expect(data.knowledgePoints).toHaveLength(2)
-    expect((await reopened.status()).schemaVersion).toBe(2)
+    expect((await reopened.status()).schemaVersion).toBe(3)
+  })
+
+  it('stores a file record, parsed chunks and a queued upload task', async () => {
+    const database = await openDatabase(await freshDriver())
+    await database.seedSynthetic()
+    const result = await database.createTextDocument(
+      {
+        id: 'file-1',
+        relativePath: 'biolearn/files/file-1.md',
+        originalFilename: 'synthetic.md',
+        mimeType: 'text/markdown',
+        sizeBytes: 12,
+        sha256: 'b'.repeat(64),
+      },
+      {
+        title: 'Synthetic',
+        encoding: 'utf-8',
+        normalizedText: '# Synthetic\nText',
+        charCount: 16,
+        chunks: [
+          {
+            id: 'chunk-file-1-0-abc',
+            index: 0,
+            headingPath: 'Synthetic',
+            headingLevel: 1,
+            content: '# Synthetic\nText',
+            pageStart: null,
+            pageEnd: null,
+            slideNumber: null,
+            charStart: 0,
+            charEnd: 16,
+            locationLabel: '文本片段 1',
+          },
+        ],
+      },
+    )
+    expect(result.uploadJobId).toBe('upload-file-1')
+    expect((await database.listFiles())[0].status).toBe('stored')
+    expect((await database.listParseJobs())[0].status).toBe('parsed')
+    expect((await database.listUploadJobs())[0].status).toBe('queued')
+    const chunks = await database.run((driver) =>
+      driver.query('SELECT * FROM local_chunks WHERE document_id = ?', ['file-1']),
+    )
+    expect(chunks).toHaveLength(1)
+  })
+
+  it('rolls back v3 migration when a later statement fails', async () => {
+    const driver = await freshDriver()
+    await driver.execute(LOCAL_MIGRATIONS[0].statements.join(';\n'), true)
+    await driver.execute(LOCAL_MIGRATIONS[1].statements.join(';\n'), true)
+    await driver.run(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES (1, 'now')",
+    )
+    await driver.run(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES (2, 'now')",
+    )
+    await driver.execute('PRAGMA user_version = 2')
+    // Force v3's index creation to fail: the existing table lacks `status`.
+    await driver.run('CREATE TABLE local_upload_jobs (id TEXT PRIMARY KEY)')
+
+    await expect(openDatabase(driver)).rejects.toBeInstanceOf(LocalDatabaseError)
+    const versions = await driver.query<{ version: number }>(
+      'SELECT version FROM schema_migrations ORDER BY version',
+    )
+    expect(versions.map((row) => row.version)).toEqual([1, 2])
+    const tables = await driver.query<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='local_files'",
+    )
+    expect(tables).toHaveLength(0)
+  })
+
+  it('enforces upload task uniqueness and legal status transitions', async () => {
+    const database = await openDatabase(await freshDriver())
+    await database.seedSynthetic()
+    await database.createTextDocument(
+      {
+        id: 'file-status',
+        relativePath: 'biolearn/files/file-status.txt',
+        originalFilename: 'status.txt',
+        mimeType: 'text/plain',
+        sizeBytes: 3,
+        sha256: 'c'.repeat(64),
+      },
+      {
+        title: 'status',
+        encoding: 'utf-8',
+        normalizedText: 'abc',
+        charCount: 3,
+        chunks: [
+          {
+            id: 'chunk-status-0',
+            index: 0,
+            headingPath: null,
+            headingLevel: null,
+            content: 'abc',
+            pageStart: null,
+            pageEnd: null,
+            slideNumber: null,
+            charStart: 0,
+            charEnd: 3,
+            locationLabel: '文本片段 1',
+          },
+        ],
+      },
+    )
+    await database.run((db) =>
+      db.run(
+        "UPDATE local_upload_jobs SET status = 'failed', last_error = 'test' WHERE id = 'upload-file-status'",
+      ),
+    )
+    const requeued = await database.requeueUploadJob('upload-file-status')
+    expect(requeued.status).toBe('queued')
+    await expect(
+      database.run((db) =>
+        db.run("UPDATE local_upload_jobs SET status = 'bogus' WHERE id = 'upload-file-status'"),
+      ),
+    ).rejects.toThrow()
   })
 })
