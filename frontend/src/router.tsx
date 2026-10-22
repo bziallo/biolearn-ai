@@ -10,6 +10,7 @@ import { HomePage } from './pages/HomePage'
 import { ImportPage } from './pages/ImportPage'
 import { JoinPage } from './pages/JoinPage'
 import { KnowledgeReviewPage } from './pages/KnowledgeReviewPage'
+import { LocalDatabasePage } from './pages/LocalDatabasePage'
 import { LoginPage } from './pages/LoginPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { PracticePage } from './pages/PracticePage'
@@ -43,6 +44,7 @@ export const router = createBrowserRouter([
       { path: 'practice', element: <PracticePage /> },
       { path: 'settings/ai', element: <AISettingsPage /> },
       { path: 'settings/connection', element: <ConnectionSettingsPage /> },
+      { path: 'settings/local-db', element: <LocalDatabasePage /> },
       { path: 'login', element: <LoginPage /> },
       { path: 'join', element: <JoinPage /> },
       { path: 'admin', element: <AdminPage /> },

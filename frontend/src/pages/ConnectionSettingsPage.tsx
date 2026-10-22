@@ -192,7 +192,8 @@ export function ConnectionSettingsPage() {
           <p className="form-hint">服务器访问控制：未启用（仅建议在本机或可信局域网使用）</p>
         )}
         <p className="form-hint">
-          <Link to="/login">登录账号</Link> · <Link to="/admin">成员与共享</Link>
+          <Link to="/login">登录账号</Link> · <Link to="/admin">成员与共享</Link> ·{' '}
+          <Link to="/settings/local-db">本地数据库（7B）</Link>
         </p>
       </section>
     </div>

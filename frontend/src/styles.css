@@ -3889,3 +3889,38 @@ td code {
     padding: 10px;
   }
 }
+
+/* Local SQLite diagnostics (7B) */
+.local-db-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.local-db-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.local-db-sample {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.local-db-export {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+
+.local-db-export code {
+  font-size: 0.78rem;
+}
